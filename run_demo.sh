@@ -1,1 +1,1 @@
-python run.py test/demo.wav --inference --use_kvcache --quant --fp16
+python run.py test/demo.wav test/music.flac test/demo.wav

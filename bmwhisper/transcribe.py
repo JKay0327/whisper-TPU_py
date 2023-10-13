@@ -107,29 +107,10 @@ def transcribe(
     A dictionary containing the resulting text ("text") and segment-level details ("segments"), and
     the spoken language ("language"), which is detected when `decode_options["language"]` is None.
     """
-    dtype = torch.float32
-    if model.fp16:
-        dtype = torch.float16
-    # dtype = torch.float16 if decode_options.get("fp16", True) else torch.float32
-    # if not model.inference:
-    #     if dtype == torch.float16:
-    #         warnings.warn("FP16 is not supported on CPU; using FP32 instead")
-    #         dtype = torch.float32
 
-    # if model.device == torch.device("cpu"): # TODO delete gpu judgment
-    #     if torch.cuda.is_available():
-    #         warnings.warn("Performing inference on CPU when CUDA is available")
-    #     if dtype == torch.float16:
-    #         warnings.warn("FP16 is not supported on CPU; using FP32 instead")
-    #         dtype = torch.float32
-
-    # if dtype == torch.float32:
-    #     decode_options["fp16"] = False
-    
-    # import pdb; pdb.set_trace()
+    dtype = torch.float16
 
     # Pad 30-seconds of silence to the input audio, for slicing
-    # import pdb; pdb.set_trace()
     mel = log_mel_spectrogram(audio, padding=N_SAMPLES) # a torch only part beacause of torch.hann_window, torch.stft etc.
     content_frames = mel.shape[-1] - N_FRAMES
 
@@ -141,13 +122,12 @@ def transcribe(
                 print(
                     "Detecting language using up to the first 30 seconds. Use `--language` to specify the language"
                 )
-            # mel_segment = pad_or_trim(mel, N_FRAMES).to(model.device).to(dtype)
             mel_segment = pad_or_trim(mel, N_FRAMES).to(dtype)
             _, probs = model.detect_language(mel_segment)
             decode_options["language"] = max(probs, key=probs.get)
             if verbose is not None:
                 print(
-                    f"Detected language: {LANGUAGES[decode_options['language']].title()}"
+                    f"Detected language: {LANGUAGES[decode_options['language']].title()}\n"
                 )
 
     language: str = decode_options["language"]
@@ -173,7 +153,7 @@ def transcribe(
             else:
                 # disable best_of when t == 0
                 kwargs.pop("best_of", None)
-            # print('{:=^80s}'.format(f' decode_with_fallback temperatures {t} '))
+            # print('{:=^100s}'.format(f' decode_with_fallback temperatures {t} '))
             # print(f"kwargs: {kwargs}")
 
             options = DecodingOptions(**kwargs, temperature=t)
@@ -392,7 +372,6 @@ def transcribe(
         language=language,
     )
 
-
 def cli():
     start_time = time.time()
     from . import available_models
@@ -420,8 +399,6 @@ def cli():
     parser.add_argument("--suppress_tokens", type=str, default="-1", help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
     parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
     parser.add_argument("--condition_on_previous_text", type=str2bool, default=True, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop")
-    # parser.add_argument("--fp16", type=str2bool, default=False, help="whether to perform inference in fp16; True by default")
-    parser.add_argument("--fp16", action="store_true", help="whether to perform inference in fp16")
 
     parser.add_argument("--temperature_increment_on_fallback", type=optional_float, default=0.2, help="temperature to increase when falling back when the decoding fails to meet either of the thresholds below")
     parser.add_argument("--compression_ratio_threshold", type=optional_float, default=2.4, help="if the gzip compression ratio is higher than this value, treat the decoding as failed")
@@ -435,30 +412,14 @@ def cli():
     parser.add_argument("--max_line_count", type=optional_int, default=None, help="(requires --word_timestamps True) the maximum number of lines in a segment")
     parser.add_argument("--threads", type=optional_int, default=0, help="number of threads used by torch for CPU inference; supercedes MKL_NUM_THREADS/OMP_NUM_THREADS")
     parser.add_argument("--padding_size", type=optional_int, default=448, help="max pre-allocation size for the key-value cache")
-    parser.add_argument("--inference", action="store_true",help="whether to perform inference or not")
-    parser.add_argument("--export_onnx", action="store_true", help="whether to export onnx model or not")
-    parser.add_argument("--use_kvcache", action="store_true", help="whether to use key-value cache or not")
-    parser.add_argument("--split", action="store_true", help="whether to split the decoder model")
-    parser.add_argument("--quant", action="store_true", help="whether to quant the inputs and outputs of model")
-    parser.add_argument("--log", action="store_true", help="whether to log the inputs and outputs of model")
-    parser.add_argument("--runtime", type=str, default="untool", help="whether to use untool or SGInfer")
     
     # fmt: on
 
     args = parser.parse_args().__dict__
-    # import pdb; pdb.set_trace()
-    # model_name: str = args.pop("model")
-    # model_dir: str = args.pop("model_dir")
-    # device: str = args.pop("device")
-    # inference: bool = args.pop("inference")
-    # export_onnx: bool = args.pop("export_onnx")
     args["model_name"] = args.pop("model")
     output_dir: str = args.pop("output_dir")
     output_format: str = args.pop("output_format")
-    device: str = "cpu"
     os.makedirs(output_dir, exist_ok=True)
-
-    assert not (args["inference"] and args["export_onnx"]), "inference and export cannot be True at the same time"
 
     model_name = args["model_name"]
     if model_name.endswith(".en") and args["language"] not in {"en", "English"}:
@@ -480,7 +441,7 @@ def cli():
     from . import load_model
 
     model = load_model(args) 
-    pop_list = ["model_name", "model_dir", "bmodel_dir", "inference", "export_onnx", "use_kvcache", "split", "quant", "log", "runtime"]
+    pop_list = ["model_name", "model_dir", "bmodel_dir"]
     for arg in pop_list:
         args.pop(arg)
 
@@ -493,34 +454,22 @@ def cli():
     if args["max_line_count"] and not args["max_line_width"]:
         warnings.warn("--max_line_count has no effect without --max_line_width")
     writer_args = {arg: args.pop(arg) for arg in word_options}
+
     for audio_path in args.pop("audio"):
+        model.init_cnt()
+        print()
+        print("{:=^100}".format(f" Start "))
+        print(f"### audio_path: {os.path.basename(audio_path)}")
+        audio_start_time = time.time()
         result = transcribe(model, audio_path, temperature=temperature, **args)
         writer(result, audio_path, writer_args)
-    print("{:=^80}".format(f" End "))
-    print(f"total tpu inference time {model.time}s")
-    print(f"call encoder times: {model.call_encoder}")
-    print(f"call logits decoder times: {model.call_logits_decoder}")
-    print(f"call decoder firstly times: {model.call_decoder_firstly}")
-    print(f"call decoder loop times: {model.call_decoder_loop}")
-    print("--- %s seconds ---" % (time.time() - start_time))
-
-    # if model.inference:
-    #     model.tool.destroy_un_runtime(model.runtime3)
-    #     model.tool.destroy_un_runtime(model.runtime4)
-    #     model.tool.destroy_un_runtime(model.runtime5)
-    #     for i in range(model.dims.n_text_layer * 2):
-    #         model.tool.destroy_un_runtime(model.kvcache_rearrange_runtime[i])
-    #     model.tool.destroy_model(model.decoder_main_handle)
-    #     model.tool.destroy_model(model.decoder_post_handle)
-    #     model.tool.destroy_model(model.decoder_loop_handle)
-    #     for i in range(model.dims.n_text_layer * 2):
-    #         model.tool.destroy_model(model.kvcache_rearrange_handle[i])
-    #     model.tool.free_bmrt(model.bmrt1)
-    #     model.tool.free_bmrt(model.bmrt2)
-    #     model.tool.free_bmrt(model.bmrt3)
-    #     for i in range(model.dims.n_text_layer * 2):
-    #         model.tool.destroy_model(model.kvcache_rearrange_bmrt[i])
-        # model.tool.free_bmhandle(model.handle)
+        cpu_time = time.time() - audio_start_time - model.time
+        print()
+        print(f"Total tpu inference time: {model.time}s")
+        print(f"Total cpu inference time: {cpu_time}s")
+        print(f"Total time: {cpu_time + model.time}s")
+        model.time = 0
+    print("{:-^100}".format(f"  Total time: {time.time() - start_time} seconds "))
 
 if __name__ == "__main__":
     cli()

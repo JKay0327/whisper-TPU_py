@@ -241,33 +241,9 @@ class Whisper(nn.Module):
         self.decoder_main_infer = None
         self.decoder_post_infer = None
         self.decoder_loop_infer = None
-        self.inference = args["inference"]
-        self.export_onnx = args["export_onnx"]
-        self.fp16 = args["fp16"]
         self.bmodel_dir = args["bmodel_dir"]
         self.beam_size = args["beam_size"]
-        self.use_kvcache = args["use_kvcache"]
-        self.split = args["split"]
         self.padding_size = args["padding_size"]
-        self.quant = args["quant"]
-        self.log = args["log"]
-        self.runtime = args["runtime"]
-
-        if not self.inference:
-            self.encoder = AudioEncoder(
-                self.dims.n_mels,
-                self.dims.n_audio_ctx,
-                self.dims.n_audio_state,
-                self.dims.n_audio_head,
-                self.dims.n_audio_layer,
-            )
-            self.decoder = TextDecoder(
-                self.dims.n_vocab,
-                self.dims.n_text_ctx,
-                self.dims.n_text_state,
-                self.dims.n_text_head,
-                self.dims.n_text_layer,
-            )
 
         # use the last half layers for alignment by default; see `set_alignment_heads()` below
         all_heads = torch.zeros(
@@ -281,180 +257,99 @@ class Whisper(nn.Module):
         assert os.path.exists(positional_embedding_path), f"{positional_embedding_path} not found"
         self.positional_embedding = torch.tensor(np.load(positional_embedding_path)["positional_embedding"])
 
-        ############################
-        ## BModel Loading
-        ############################
-        if self.inference:
-            if self.fp16:
-                dtype = "f16"
-            else:
-                dtype = "f32"
+        ########################################
+        ## Using untool to load BModel
+        ########################################
+        start_time = time.time()
+        quant_str = "all_quant"
+        encoder_bmodel_path           = f"{quant_str}_encoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
+        logits_decoder_bmodel_path    = f"{quant_str}_logits_decoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
+        decoder_main_bmodel_path      = f"{quant_str}_decoder_main_with_kvcache_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
+        decoder_post_bmodel_path      = f"{quant_str}_decoder_post_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
+        decoder_loop_bmodel_path      = f"{quant_str}_decoder_loop_with_kvcache_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
+        kvcache_rearrange_bmodel_path = f"{quant_str}_kvcache_rearrange_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
+        encoder_bmodel_path           = os.path.join(self.bmodel_dir, encoder_bmodel_path)
+        logits_decoder_bmodel_path    = os.path.join(self.bmodel_dir, logits_decoder_bmodel_path)
+        decoder_main_bmodel_path      = os.path.join(self.bmodel_dir, decoder_main_bmodel_path)
+        decoder_post_bmodel_path      = os.path.join(self.bmodel_dir, decoder_post_bmodel_path)
+        decoder_loop_bmodel_path      = os.path.join(self.bmodel_dir, decoder_loop_bmodel_path)
+        kvcache_rearrange_bmodel_path = os.path.join(self.bmodel_dir, kvcache_rearrange_bmodel_path)
+        assert os.path.exists(encoder_bmodel_path), f"{encoder_bmodel_path} not found"
+        assert os.path.exists(logits_decoder_bmodel_path), f"{logits_decoder_bmodel_path} not found"
+        assert os.path.exists(decoder_main_bmodel_path), f"{decoder_main_bmodel_path} not found"
+        assert os.path.exists(decoder_post_bmodel_path), f"{decoder_post_bmodel_path} not found"
+        assert os.path.exists(decoder_loop_bmodel_path), f"{decoder_loop_bmodel_path} not found"
+        assert os.path.exists(kvcache_rearrange_bmodel_path), f"{kvcache_rearrange_bmodel_path} not found"
 
-            quant_str = "all_quant"
-            if self.quant:
-                encoder_bmodel_path = f"{quant_str}_encoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-                logits_decoder_bmodel_path = f"{quant_str}_logits_decoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-            else:
-                encoder_bmodel_path = f"encoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-                logits_decoder_bmodel_path = f"logits_decoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-            
-            encoder_bmodel_path = os.path.join(self.bmodel_dir, encoder_bmodel_path)
-            logits_decoder_bmodel_path = os.path.join(self.bmodel_dir, logits_decoder_bmodel_path)
-            
-            start_time = time.time()
-            assert os.path.exists(encoder_bmodel_path), f"{encoder_bmodel_path} not found"
-            self.encoder_infer = SGInfer(encoder_bmodel_path, 1, [0])
-            assert os.path.exists(logits_decoder_bmodel_path), f"{logits_decoder_bmodel_path} not found"
-            self.logits_decoder_infer = SGInfer(logits_decoder_bmodel_path, 1, [0])
+        self.tool                  = Tool()
+        self.handle                = self.tool.bmhandle(0)
+        self.bmrt1                 = self.tool.bmrt(self.handle)
+        self.bmrt2                 = self.tool.bmrt(self.handle)
+        self.bmrt3                 = self.tool.bmrt(self.handle)
+        self.bmrt4                 = self.tool.bmrt(self.handle)
+        self.bmrt5                 = self.tool.bmrt(self.handle)
+        self.encoder_handle        = self.tool.create_model(encoder_bmodel_path.encode("utf-8"), self.bmrt1)
+        self.logits_decoder_handle = self.tool.create_model(logits_decoder_bmodel_path.encode("utf-8"), self.bmrt2)
+        self.decoder_main_handle   = self.tool.create_model(decoder_main_bmodel_path.encode("utf-8"), self.bmrt3)
+        self.decoder_main_handle   = self.tool.create_model(decoder_main_bmodel_path.encode("utf-8"), self.bmrt3)
+        self.decoder_post_handle   = self.tool.create_model(decoder_post_bmodel_path.encode("utf-8"), self.bmrt4)
+        self.decoder_loop_handle   = self.tool.create_model(decoder_loop_bmodel_path.encode("utf-8"), self.bmrt5)
+        self.runtime1              = self.tool.create_un_runtime(self.handle)
+        self.runtime2              = self.tool.create_un_runtime(self.handle)
+        self.runtime3              = self.tool.create_un_runtime(self.handle)
+        self.runtime4              = self.tool.create_un_runtime(self.handle)
+        self.runtime5              = self.tool.create_un_runtime(self.handle)
 
-            self.decoder_post_infer = None
-            self.decoder_main_infer = None
-            self.decoder_loop_infer = None
+        self.tool.set_bmodel_info(self.runtime1, self.encoder_handle)
+        self.tool.set_bmodel_info(self.runtime2, self.logits_decoder_handle)
+        self.tool.set_bmodel_info(self.runtime3, self.decoder_main_handle)
+        self.tool.set_bmodel_info(self.runtime4, self.decoder_post_handle)
+        self.tool.set_bmodel_info(self.runtime5, self.decoder_loop_handle)
+        self.tool.set_stage(self.runtime1, 0)
+        self.tool.set_stage(self.runtime2, 0)
+        self.tool.set_stage(self.runtime3, 0)
+        self.tool.set_stage(self.runtime4, 0)
+        self.tool.set_stage(self.runtime5, 0)
+        self.tool.init_all_tensors(self.runtime1)
+        self.tool.init_all_tensors(self.runtime2)
+        self.tool.init_all_tensors(self.runtime3)
+        self.tool.init_all_tensors(self.runtime4)
+        self.tool.init_all_tensors(self.runtime5)
+        self.tool.malloc_device_address(self.runtime1)
+        self.tool.malloc_device_address(self.runtime2)
+        self.tool.malloc_device_address(self.runtime3)
+        self.tool.malloc_device_address(self.runtime4)
+        self.tool.malloc_device_address(self.runtime5)
 
-            ############################
-            ## Using Untool
-            ############################
-            self.tool = Tool()
-            self.handle = self.tool.bmhandle(0)
-            self.bmrt1 = self.tool.bmrt(self.handle)
-            self.bmrt2 = self.tool.bmrt(self.handle)
-            self.bmrt3 = self.tool.bmrt(self.handle)
-            self.bmrt4 = self.tool.bmrt(self.handle)
-            self.bmrt5 = self.tool.bmrt(self.handle)
-            encoder_bmodel_path        = f"{quant_str}_encoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-            logits_decoder_bmodel_path = f"{quant_str}_logits_decoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-            decoder_main_bmodel_path   = f"{quant_str}_decoder_main_with_kvcache_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-            decoder_post_bmodel_path   = f"{quant_str}_decoder_post_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-            decoder_loop_bmodel_path   = f"{quant_str}_decoder_loop_with_kvcache_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-            encoder_bmodel_path        = os.path.join(self.bmodel_dir, encoder_bmodel_path)
-            logits_decoder_bmodel_path = os.path.join(self.bmodel_dir, logits_decoder_bmodel_path)
-            decoder_main_bmodel_path   = os.path.join(self.bmodel_dir, decoder_main_bmodel_path)
-            decoder_post_bmodel_path   = os.path.join(self.bmodel_dir, decoder_post_bmodel_path)
-            decoder_loop_bmodel_path   = os.path.join(self.bmodel_dir, decoder_loop_bmodel_path)
-            self.encoder_handle        = self.tool.create_model(encoder_bmodel_path.encode("utf-8"), self.bmrt1)
-            self.logits_decoder_handle = self.tool.create_model(logits_decoder_bmodel_path.encode("utf-8"), self.bmrt2)
-            self.decoder_main_handle   = self.tool.create_model(decoder_main_bmodel_path.encode("utf-8"), self.bmrt3)
-            self.decoder_main_handle   = self.tool.create_model(decoder_main_bmodel_path.encode("utf-8"), self.bmrt3)
-            self.decoder_post_handle   = self.tool.create_model(decoder_post_bmodel_path.encode("utf-8"), self.bmrt4)
-            self.decoder_loop_handle   = self.tool.create_model(decoder_loop_bmodel_path.encode("utf-8"), self.bmrt5)
-            self.runtime1 = self.tool.create_un_runtime(self.handle)
-            self.runtime2 = self.tool.create_un_runtime(self.handle)
-            self.runtime3 = self.tool.create_un_runtime(self.handle)
-            self.runtime4 = self.tool.create_un_runtime(self.handle)
-            self.runtime5 = self.tool.create_un_runtime(self.handle)
-            self.tool.set_bmodel_info(self.runtime1, self.encoder_handle)
-            self.tool.set_bmodel_info(self.runtime2, self.logits_decoder_handle)
-            self.tool.set_bmodel_info(self.runtime3, self.decoder_main_handle)
-            self.tool.set_bmodel_info(self.runtime4, self.decoder_post_handle)
-            self.tool.set_bmodel_info(self.runtime5, self.decoder_loop_handle)
-            self.tool.set_stage(self.runtime1, 0)
-            self.tool.set_stage(self.runtime2, 0)
-            self.tool.set_stage(self.runtime3, 0)
-            self.tool.set_stage(self.runtime4, 0)
-            self.tool.set_stage(self.runtime5, 0)
-            self.tool.init_all_tensors(self.runtime1)
-            self.tool.init_all_tensors(self.runtime2)
-            self.tool.init_all_tensors(self.runtime3)
-            self.tool.init_all_tensors(self.runtime4)
-            self.tool.init_all_tensors(self.runtime5)
-            self.tool.malloc_device_address(self.runtime1)
-            self.tool.malloc_device_address(self.runtime2)
-            self.tool.malloc_device_address(self.runtime3)
-            self.tool.malloc_device_address(self.runtime4)
-            self.tool.malloc_device_address(self.runtime5)
+        self.kvcache_rearrange_bmrt = []
+        self.kvcache_rearrange_handle = []
+        self.kvcache_rearrange_runtime = []
+        for i in range(self.dims.n_text_layer * 2):
+            bmrt = self.tool.bmrt(self.handle)
+            handle = self.tool.create_model(kvcache_rearrange_bmodel_path.encode("utf-8"), bmrt)
+            runtime = self.tool.create_un_runtime(self.handle)
+            self.tool.set_bmodel_info(runtime, handle)
+            self.tool.set_stage(runtime, 0)
+            self.tool.init_all_tensors(runtime)
+            self.tool.malloc_device_address(runtime)
+            self.tool.set_input_tensor(runtime, 0, self.tool.get_output_tensor(self.runtime3, i + 1))
+            self.tool.set_output_tensor(runtime, 0, self.tool.get_input_tensor(runtime, 0))
 
-            kvcache_rearrange_bmodel_path = f"{quant_str}_kvcache_rearrange_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel"
-            kvcache_rearrange_bmodel_path = os.path.join(self.bmodel_dir, kvcache_rearrange_bmodel_path)
-            self.kvcache_rearrange_bmrt = []
-            self.kvcache_rearrange_handle = []
-            self.kvcache_rearrange_runtime = []
-            for i in range(self.dims.n_text_layer * 2):
-                bmrt = self.tool.bmrt(self.handle)
-                handle = self.tool.create_model(kvcache_rearrange_bmodel_path.encode("utf-8"), bmrt)
-                runtime = self.tool.create_un_runtime(self.handle)
-                self.tool.set_bmodel_info(runtime, handle)
-                self.tool.set_stage(runtime, 0)
-                self.tool.init_all_tensors(runtime)
-                self.tool.malloc_device_address(runtime)
-                self.tool.set_input_tensor(runtime, 0, self.tool.get_output_tensor(self.runtime3, i + 1))
-                self.tool.set_output_tensor(runtime, 0, self.tool.get_input_tensor(runtime, 0))
+            self.kvcache_rearrange_bmrt.append(bmrt)
+            self.kvcache_rearrange_handle.append(handle)
+            self.kvcache_rearrange_runtime.append(runtime)
 
-                self.kvcache_rearrange_bmrt.append(bmrt)
-                self.kvcache_rearrange_handle.append(handle)
-                self.kvcache_rearrange_runtime.append(runtime)
+        for i in range(self.dims.n_text_layer * 4):
+            self.tool.set_input_tensor(self.runtime5, i + 3, self.tool.get_output_tensor(self.runtime3, i + 1))
+        for i in range(self.dims.n_text_layer * 2):
+            self.tool.set_output_tensor(self.runtime5, i + 1, self.tool.get_input_tensor(self.runtime5, i + 3))
+        kvcache_rearrange_runtime_base = self.kvcache_rearrange_runtime[0]
+        for i in range(self.dims.n_text_layer * 2 - 1):
+            self.tool.set_input_tensor(self.kvcache_rearrange_runtime[i + 1], 1, self.tool.get_input_tensor(kvcache_rearrange_runtime_base, 1))
 
-            for i in range(self.dims.n_text_layer * 4):
-                self.tool.set_input_tensor(self.runtime5, i + 3, self.tool.get_output_tensor(self.runtime3, i + 1))
-            for i in range(self.dims.n_text_layer * 2):
-                self.tool.set_output_tensor(self.runtime5, i + 1, self.tool.get_input_tensor(self.runtime5, i + 3))
-            kvcache_rearrange_runtime_base = self.kvcache_rearrange_runtime[0]
-            for i in range(self.dims.n_text_layer * 2 - 1):
-                self.tool.set_input_tensor(self.kvcache_rearrange_runtime[i + 1], 1, self.tool.get_input_tensor(kvcache_rearrange_runtime_base, 1))
-            
-            if self.model_name == "small":
-                # self.paddings = [320, 384, 448]
-                self.paddings = [448]
-            else:
-                self.paddings = [448]
-            # self.paddings= [256]
-            self.encoder_infer_zoo = {}
-            self.logits_decoder_infer_zoo = {}
-            self.decoder_post_infer_zoo = {}
-            self.decoder_main_infer_zoo = {}
-            self.decoder_loop_infer_zoo = {}
+        self.init_time = time.time() - start_time
+        print(f"\nTPU bmodel init time: {self.init_time}s")
 
-            for pad in self.paddings:
-                if self.quant:
-                    decoder_post_bmodel_path = f"{quant_str}_decoder_post_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                    if self.use_kvcache:
-                        decoder_main_bmodel_path = f"{quant_str}_decoder_main_with_kvcache_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                        decoder_loop_bmodel_path = f"{quant_str}_decoder_loop_with_kvcache_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                    else:
-                        decoder_main_bmodel_path = f"{quant_str}_decoder_main_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                        decoder_loop_bmodel_path = f"{quant_str}_decoder_loop_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                else:
-                    decoder_post_bmodel_path = f"decoder_post_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                    if self.use_kvcache:
-                        decoder_main_bmodel_path = f"decoder_main_with_kvcache_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                        decoder_loop_bmodel_path = f"decoder_loop_with_kvcache_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                    else:
-                        decoder_main_bmodel_path = f"decoder_main_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                        decoder_loop_bmodel_path = f"decoder_loop_{self.model_name}_{self.beam_size}beam_{pad}pad_1684x_f16.bmodel"
-                
-                # encoder_bmodel_path = os.path.join(self.bmodel_dir, encoder_bmodel_path)
-                # logits_decoder_bmodel_path = os.path.join(self.bmodel_dir, logits_decoder_bmodel_path)
-                decoder_post_bmodel_path = os.path.join(self.bmodel_dir, decoder_post_bmodel_path)
-                decoder_main_bmodel_path = os.path.join(self.bmodel_dir, decoder_main_bmodel_path)
-                decoder_loop_bmodel_path = os.path.join(self.bmodel_dir, decoder_loop_bmodel_path)
-
-                # assert os.path.exists(encoder_bmodel_path), f"{encoder_bmodel_path} not found"
-                # self.encoder_infer_zoo[pad] = SGInfer(encoder_bmodel_path, 1, [0])
-                # assert os.path.exists(logits_decoder_bmodel_path), f"{logits_decoder_bmodel_path} not found"
-                # self.logits_decoder_infer_zoo[pad] = SGInfer(logits_decoder_bmodel_path, 1, [0])
-                assert os.path.exists(decoder_post_bmodel_path), f"{decoder_post_bmodel_path} not found"
-                self.decoder_post_infer_zoo[pad] = SGInfer(decoder_post_bmodel_path, 1, [0])
-                assert os.path.exists(decoder_main_bmodel_path), f"{decoder_main_bmodel_path} not found"
-                self.decoder_main_infer_zoo[pad] = SGInfer(decoder_main_bmodel_path, 1, [0])
-                assert os.path.exists(decoder_loop_bmodel_path), f"{decoder_loop_bmodel_path} not found"
-                self.decoder_loop_infer_zoo[pad] = SGInfer(decoder_loop_bmodel_path, 1, [0])
-
-            # if self.use_kvcache:
-            #     decoder_main_bmodel_path = os.path.join(self.bmodel_dir, f"decoder_main_with_kvcache_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel")
-            #     decoder_main_bmodel_path = os.path.join(self.bmodel_dir, f"quant_decoder_main_with_kvcache_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel")
-            #     self.decoder_main_infer = SGInfer(decoder_main_bmodel_path, 1, [0])
-            #     decoder_loop_bmodel_path = os.path.join(self.bmodel_dir, f"decoder_loop_with_kvcache_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel")
-            #     decoder_loop_bmodel_path = os.path.join(self.bmodel_dir, f"quant_decoder_loop_with_kvcache_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel")
-            #     self.decoder_loop_infer = SGInfer(decoder_loop_bmodel_path, 1, [0])
-            # else:
-            #     decoder_main_bmodel_path = os.path.join(self.bmodel_dir, f"decoder_main_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel")
-            #     decoder_main_bmodel_path = os.path.join(self.bmodel_dir, f"quant_decoder_main_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel")
-            #     self.decoder_main_infer = SGInfer(decoder_main_bmodel_path, 1, [0])
-            #     decoder_loop_bmodel_path = os.path.join(self.bmodel_dir, f"decoder_loop_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel")
-            #     decoder_loop_bmodel_path = os.path.join(self.bmodel_dir, f"quant_decoder_loop_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad_1684x_f16.bmodel")
-            #     self.decoder_loop_infer = SGInfer(decoder_loop_bmodel_path, 1, [0])
-            print("--- %s seconds ---" % (time.time() - start_time))
-        # else:
-        #     self.paddings= [self.padding_size]
         self.time = 0
         self.main_loop_cnt = 0
         self.call_encoder = 0
@@ -462,7 +357,27 @@ class Whisper(nn.Module):
         self.call_decoder_loop= 0
         self.call_decoder_firstly= 0
         self.call_decoder_with_kvcache = 0
+        self.call_kvcache_rearrange = 0
         self.max_ctx = 0
+    
+    def init_cnt(self):
+        self.main_loop_cnt = 0
+        self.call_encoder = 0
+        self.call_logits_decoder= 0
+        self.call_decoder_loop= 0
+        self.call_decoder_firstly= 0
+        self.call_kvcache_rearrange = 0
+        
+    
+    def print_cnt(self):
+        def print_cnt(text, cnt, n):
+            print(f"{text:<{n}} {cnt}")
+        print()
+        print_cnt("Call encoder times:", self.call_encoder, 50)
+        print_cnt("Call logits decoder times:", self.call_logits_decoder, 50)
+        print_cnt("Call decoder firstly times:", self.call_decoder_firstly, 50)
+        print_cnt("Call decoder loop:", self.call_decoder_loop, 50)
+        print_cnt("Call kvcache rearrange times:", self.call_kvcache_rearrange, 50)
 
     def set_alignment_heads(self, dump: bytes):
         array = np.frombuffer(
@@ -477,76 +392,39 @@ class Whisper(nn.Module):
         return self.encoder(mel)
 
     def logits(self, tokens: torch.Tensor, audio_features: torch.Tensor):
-        print("{:=^80}".format(" model.logits "))
+        # print("{:=^100}".format(" model.logits "))
         # TODO: condition of multi-channel audio
-        if self.inference:
-            # import pdb; pdb.set_trace()
-            # tokens = tokens.numpy().astype(np.int32)
-            # audio_features = audio_features.numpy()
-            # audio_features = audio_features.numpy().astype(nptype(self.logits_decoder_infer.get_input_info()["audio_features"]["dtype"]))
-            start_time = time.time()
+        start_time = time.time()
 
+        logits_decoder_info = self.tool.model_info(self.logits_decoder_handle)
+        tokens_input_dtype = data_type_map[logits_decoder_info['input_dtypes'][0]]
+        audio_features_input_dtype = data_type_map[logits_decoder_info['input_dtypes'][1]]
+        tokens = tokens.numpy().astype(tokens_input_dtype)
+        audio_features = audio_features.numpy().astype(audio_features_input_dtype)
+        tokens = tokens if tokens.flags.c_contiguous else np.ascontiguousarray(tokens)
+        audio_features = audio_features if audio_features.flags.c_contiguous else np.ascontiguousarray(audio_features)
 
+        self.tool.copy_data_from_numpy(self.tool.get_input_tensor(self.runtime2, 0), make_np2c(tokens), data_type[tokens_input_dtype])
+        self.tool.copy_data_from_numpy(self.tool.get_input_tensor(self.runtime2, 1), make_np2c(audio_features), data_type[audio_features_input_dtype])
+        self.tool.force_host_to_device(self.tool.get_input_tensor(self.runtime2, 0), self.handle)
+        self.tool.force_host_to_device(self.tool.get_input_tensor(self.runtime2, 1), self.handle)
 
-            logits_decoder_info = self.tool.model_info(self.logits_decoder_handle)
-            tokens_input_dtype = data_type_map[logits_decoder_info['input_dtypes'][0]]
-            audio_features_input_dtype = data_type_map[logits_decoder_info['input_dtypes'][1]]
-            tokens = tokens.numpy().astype(tokens_input_dtype)
-            audio_features = audio_features.numpy().astype(audio_features_input_dtype)
-            tokens = tokens if tokens.flags.c_contiguous else np.ascontiguousarray(tokens)
-            audio_features = audio_features if audio_features.flags.c_contiguous else np.ascontiguousarray(audio_features)
+        logits = np.empty(logits_decoder_info[0]['output_shapes'][0], dtype=data_type_map[logits_decoder_info['output_dtypes'][0]])
+        self.tool.copy_data_from_numpy(self.tool.get_output_tensor(self.runtime2, 0), make_np2c(logits), logits_decoder_info['output_dtypes'][0])
+        self.tool.inference(self.runtime2)
+        self.tool.copy_output_data_to_host(self.runtime2)
 
-            self.tool.copy_data_from_numpy(self.tool.get_input_tensor(self.runtime2, 0), make_np2c(tokens), data_type[tokens_input_dtype])
-            self.tool.copy_data_from_numpy(self.tool.get_input_tensor(self.runtime2, 1), make_np2c(audio_features), data_type[audio_features_input_dtype])
-            self.tool.force_host_to_device(self.tool.get_input_tensor(self.runtime2, 0), self.handle)
-            self.tool.force_host_to_device(self.tool.get_input_tensor(self.runtime2, 1), self.handle)
+        logits = torch.from_numpy(logits)
 
-            logits = np.empty(logits_decoder_info[0]['output_shapes'][0], dtype=data_type_map[logits_decoder_info['output_dtypes'][0]])
-            self.tool.copy_data_from_numpy(self.tool.get_output_tensor(self.runtime2, 0), make_np2c(logits), logits_decoder_info['output_dtypes'][0])
-            # pdb.set_trace()
-            self.tool.inference(self.runtime2)
-            self.tool.copy_output_data_to_host(self.runtime2)
-            # tool.print_output_data(self.model.runtime4)
-            # import pdb; pdb.set_trace()
-
-            logits = torch.from_numpy(logits)
-
-
-
-            # _ = self.logits_decoder_infer.put(tokens, audio_features)
-            # _, result, _ = self.logits_decoder_infer.get()
-            # logits = torch.from_numpy(result[0])
-            print(f"logits inference time: {time.time() - start_time} seconds")
-            self.time += time.time() - start_time
-            # import pdb; pdb.set_trace()
-            # logits = torch.from_numpy(result[0].astype(np.float32))
-        else:
-            # import pdb; pdb.set_trace()
-            if self.export_onnx:
-                onnx_input_names = ["tokens", "audio_features"]
-                onnx_output_names = ["logits",]
-                onnx_input_dict = {"tokens":tokens, "audio_features":audio_features}
-                model_name= f"logits_decoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad"
-
-                np.savez(model_name + "_inputs.npz", **onnx_input_dict)
-                torch.onnx.export(
-                    self.decoder,
-                    (tokens, audio_features,),  # Pass the actual input data
-                    model_name + ".onnx",
-                    verbose=True,
-                    input_names=onnx_input_names,  # Provide input names
-                    output_names=onnx_output_names,  # Provide output names
-                    opset_version=15,  # ONNX opset version to use
-                )
-            logits = self.decoder(tokens, audio_features)
+        self.time += time.time() - start_time
+        # print(f"logits inference time: {time.time() - start_time} seconds")
         self.call_logits_decoder += 1
         return logits
-        # return self.decoder(tokens, audio_features)
 
     def forward(
         self, mel: torch.Tensor, tokens: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
-        print("{:=^80}".format(" model.forward "))
+        print("{:=^100}".format(" model.forward "))
         return self.decoder(tokens, self.encoder(mel))
 
     @property
@@ -556,47 +434,6 @@ class Whisper(nn.Module):
     @property
     def is_multilingual(self):
         return self.dims.n_vocab == 51865
-
-    def install_kv_cache_hooks(self, cache: Optional[dict] = None):
-        """
-        The `MultiHeadAttention` module optionally accepts `kv_cache` which stores the key and value
-        tensors calculated for the previous positions. This method returns a dictionary that stores
-        all caches, and the necessary hooks for the key and value projection modules that save the
-        intermediate tensors to be reused during later calculations.
-
-        Returns
-        -------
-        cache : Dict[nn.Module, torch.Tensor]
-            A dictionary object mapping the key/value projection modules to its cache
-        hooks : List[RemovableHandle]
-            List of PyTorch RemovableHandle objects to stop the hooks to be called
-        """
-        cache = {**cache} if cache is not None else {}
-        hooks = []
-        c_num = []
-
-        def save_to_cache(module, _, output):
-            if module not in cache or output.shape[1] > self.dims.n_text_ctx:
-                # save as-is, for the first token or cross attention
-                cache[module] = output
-            else:
-                cache[module] = torch.cat([cache[module], output], dim=1).detach()
-            return cache[module]
-
-        def install_hooks(layer: nn.Module):
-            if isinstance(layer, MultiHeadAttention):
-                # import pdb; pdb.set_trace()
-                hooks.append(layer.key.register_forward_hook(save_to_cache))
-                hooks.append(layer.value.register_forward_hook(save_to_cache))
-
-        def fn(module):
-            if isinstance(module, MultiHeadAttention):
-                c_num.append(1)
-        self.decoder.apply(fn)
-        print(f"decoder MultiHeadAttention num: {len(c_num)}") # 12
-
-        self.decoder.apply(install_hooks)
-        return cache, hooks
 
     detect_language = detect_language_function
     transcribe = transcribe_function

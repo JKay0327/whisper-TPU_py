@@ -118,110 +118,77 @@ def load_model(
         The Whisper ASR model instance
     """
 
-    # if device is None:
-    #     device = "cuda" if torch.cuda.is_available() else "cpu"
-    # import pdb; pdb.set_trace()
-    inference = args["inference"]
     name = args["model_name"]
-    # device = args["device"]
-    download_root = args["model_dir"]
-    fp16 = args["fp16"]
     
-    if not inference:
-        if download_root is None:
-            default = os.path.join(os.path.expanduser("~"), ".cache")
-            download_root = os.path.join(os.getenv("XDG_CACHE_HOME", default), "whisper")
-
-        if name in _MODELS:
-            checkpoint_file = _download(_MODELS[name], download_root, in_memory)
-            # alignment_heads = _ALIGNMENT_HEADS[name]
-        elif os.path.isfile(name):
-            checkpoint_file = open(name, "rb").read() if in_memory else name
-            # alignment_heads = None
-        else:
-            raise RuntimeError(
-                f"Model {name} not found; available models = {available_models()}"
-            )
-
-        with (
-            io.BytesIO(checkpoint_file) if in_memory else open(checkpoint_file, "rb")
-        ) as fp:
-            checkpoint = torch.load(fp, map_location="cpu")
-        del checkpoint_file
-
-        dims = ModelDimensions(**checkpoint["dims"])
-        model = Whisper(dims, args)
-        model.load_state_dict(checkpoint["model_state_dict"])
+    if name == "base":
+        dims = ModelDimensions(
+            n_mels=80,
+            n_audio_ctx=1500,
+            n_audio_state=512,
+            n_audio_head=8,
+            n_audio_layer=6,
+            n_vocab=51865,
+            n_text_ctx=448,
+            n_text_state=512,
+            n_text_head=8,
+            n_text_layer=6
+        )
+    elif name == "large" or name == "large-v2":
+        dims = ModelDimensions(
+            n_mels=80,
+            n_audio_ctx=1500,
+            n_audio_state=1280,
+            n_audio_head=20,
+            n_audio_layer=32,
+            n_vocab=51865,
+            n_text_ctx=448,
+            n_text_state=1280,
+            n_text_head=20,
+            n_text_layer=32
+        )
+    elif name == "tiny":
+        dims = ModelDimensions(
+            n_mels=80,
+            n_audio_ctx=1500,
+            n_audio_state=384,
+            n_audio_head=6,
+            n_audio_layer=4,
+            n_vocab=51865,
+            n_text_ctx=448,
+            n_text_state=384,
+            n_text_head=6,
+            n_text_layer=4
+        )
+    elif name == "medium":
+        dims = ModelDimensions(
+            n_mels=80,
+            n_audio_ctx=1500,
+            n_audio_state=1024,
+            n_audio_head=16,
+            n_audio_layer=24,
+            n_vocab=51865,
+            n_text_ctx=448,
+            n_text_state=1024,
+            n_text_head=16,
+            n_text_layer=24
+        )
+    elif name == "small":
+        dims = ModelDimensions(
+            n_mels=80,
+            n_audio_ctx=1500,
+            n_audio_state=768,
+            n_audio_head=12,
+            n_audio_layer=12,
+            n_vocab=51865,
+            n_text_ctx=448,
+            n_text_state=768,
+            n_text_head=12,
+            n_text_layer=12
+        )
     else:
-        if name == "base":
-            dims = ModelDimensions(
-                n_mels=80,
-                n_audio_ctx=1500,
-                n_audio_state=512,
-                n_audio_head=8,
-                n_audio_layer=6,
-                n_vocab=51865,
-                n_text_ctx=448,
-                n_text_state=512,
-                n_text_head=8,
-                n_text_layer=6
-            )
-        elif name == "large" or name == "large-v2":
-            dims = ModelDimensions(
-               n_mels=80,
-               n_audio_ctx=1500,
-               n_audio_state=1280,
-               n_audio_head=20,
-               n_audio_layer=32,
-               n_vocab=51865,
-               n_text_ctx=448,
-               n_text_state=1280,
-               n_text_head=20,
-               n_text_layer=32
-            )
-        elif name == "tiny":
-            dims = ModelDimensions(
-                n_mels=80,
-                n_audio_ctx=1500,
-                n_audio_state=384,
-                n_audio_head=6,
-                n_audio_layer=4,
-                n_vocab=51865,
-                n_text_ctx=448,
-                n_text_state=384,
-                n_text_head=6,
-                n_text_layer=4
-            )
-        elif name == "medium":
-            dims = ModelDimensions(
-               n_mels=80,
-               n_audio_ctx=1500,
-               n_audio_state=1024,
-               n_audio_head=16,
-               n_audio_layer=24,
-               n_vocab=51865,
-               n_text_ctx=448,
-               n_text_state=1024,
-               n_text_head=16,
-               n_text_layer=24
-            )
-        elif name == "small":
-            dims = ModelDimensions(
-               n_mels=80,
-               n_audio_ctx=1500,
-               n_audio_state=768,
-               n_audio_head=12,
-               n_audio_layer=12,
-               n_vocab=51865,
-               n_text_ctx=448,
-               n_text_state=768,
-               n_text_head=12,
-               n_text_layer=12
-            )
-        else:
-            raise NotImplementedError("Only \"tiny, base, small, medium, large\" model is supported for inference")
-        
-        model = Whisper(dims, args)
+        raise NotImplementedError("Only \"tiny, base, small, medium, large\" model is supported for inference")
+    
+    model = Whisper(dims, args)
     
     if name in _MODELS:
         alignment_heads = _ALIGNMENT_HEADS[name]

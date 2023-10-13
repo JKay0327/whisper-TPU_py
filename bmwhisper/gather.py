@@ -19,6 +19,7 @@ def export_gather():
     parser.add_argument("--model", default="small", choices=available_models(), help="name of the Whisper model to use")
     args = parser.parse_args().__dict__
     name = args["model"]
+    beam_size = args["beam_size"]
     if name == "base":
         dims = ModelDimensions(
             n_mels=80,
@@ -90,7 +91,7 @@ def export_gather():
     torch.onnx.export(
         gather,
         (input, index),
-        "kvcache_rearrange_small_5beam_448pad.onnx",
+        f"kvcache_rearrange_{name}_{beam_size}beam_448pad.onnx",
         verbose=True,
         opset_version=15
     )

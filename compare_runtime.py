@@ -19,7 +19,7 @@ def compare():
     encoder_sg_infer.put(mel)
     _, result, _ = encoder_sg_infer.get()
     output_sg = torch.from_numpy(result[0])
-    print("{:=^80}".format(f" sg_infer "))
+    print("{:=^100}".format(f" sg_infer "))
     print(output_sg)
     print("sg time: ", time.time() - start_time)
 
@@ -47,7 +47,7 @@ def compare():
     # print(output_untool)
     # tool.device_to_host(tool.get_output_tensor(runtime, 0))
     output_untool = torch.from_numpy(output_untool)
-    print("{:=^80}".format(f" untool_infer "))
+    print("{:=^100}".format(f" untool_infer "))
     print(output_untool)
     print("untool time: ", time.time() - start_time)
 
@@ -72,7 +72,7 @@ def compare():
     decoder_sg_infer.put(tokens_input, audio_features, positional_embedding_input, mask)
     _, result, _ = decoder_sg_infer.get()
     output_sg = torch.from_numpy(result[0])
-    print("{:=^80}".format(f" sg_infer "))
+    print("{:=^100}".format(f" sg_infer "))
     print(output_sg)
     print("sg time: ", time.time() - start_time)
 
@@ -103,7 +103,7 @@ def compare():
     # print(output_untool)
     # tool1.device_to_host(tool1.get_output_tensor(runtime1, 0))
     output_untool = torch.from_numpy(output_untool)
-    print("{:=^80}".format(f" untool_infer "))
+    print("{:=^100}".format(f" untool_infer "))
     print(output_untool)
     print("untool time: ", time.time() - start_time)
 
