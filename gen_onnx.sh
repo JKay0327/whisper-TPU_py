@@ -6,6 +6,15 @@ beam_size=5
 padding_size=448
 use_kvcache=false
 
+python setup.py install
+
+work_dir="tmp"
+if [ ! -d "$work_dir" ]; then
+    mkdir "$work_dir"
+    echo "[Cmd] mkdir $work_dir"
+fi
+pushd "$work_dir"
+
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     key="$1"
@@ -34,16 +43,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+onnx_export_cmd="bmwhisper ../test/demo.wav --model $model --beam_size $beam_size --padding_size $padding_size --export_onnx"
+
 echo "Generating onnx models ..."
 if [ "$use_kvcache" = true ]; then
-    python run.py demo.wav --model $model --beam_size $beam_size --padding_size $padding_size --export_onnx  --use_kvcache
-else
-    python run.py demo.wav --model $model --beam_size $beam_size --padding_size $padding_size --export_onnx
+    onnx_export_cmd="$onnx_export_cmd --use_kvcache"
 fi
 
-if [ ! -d onnx_model ]; then
+echo "[Cmd] Running command: $onnx_export_cmd"
+eval "$onnx_export_cmd"
+
+if [ ! -d "onnx_model" ]; then
     mkdir "onnx_model"
     echo "[Cmd] mkdir onnx_model"
 fi
 
 mv *.onnx *.npz onnx_model
+
+popd

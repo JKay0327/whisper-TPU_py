@@ -107,7 +107,15 @@ def transcribe(
     A dictionary containing the resulting text ("text") and segment-level details ("segments"), and
     the spoken language ("language"), which is detected when `decode_options["language"]` is None.
     """
-    dtype = torch.float16 if decode_options.get("fp16", True) else torch.float32
+    dtype = torch.float32
+    if model.fp16:
+        dtype = torch.float16
+    # dtype = torch.float16 if decode_options.get("fp16", True) else torch.float32
+    # if not model.inference:
+    #     if dtype == torch.float16:
+    #         warnings.warn("FP16 is not supported on CPU; using FP32 instead")
+    #         dtype = torch.float32
+
     # if model.device == torch.device("cpu"): # TODO delete gpu judgment
     #     if torch.cuda.is_available():
     #         warnings.warn("Performing inference on CPU when CUDA is available")
@@ -412,7 +420,8 @@ def cli():
     parser.add_argument("--suppress_tokens", type=str, default="-1", help="comma-separated list of token ids to suppress during sampling; '-1' will suppress most special characters except common punctuations")
     parser.add_argument("--initial_prompt", type=str, default=None, help="optional text to provide as a prompt for the first window.")
     parser.add_argument("--condition_on_previous_text", type=str2bool, default=True, help="if True, provide the previous output of the model as a prompt for the next window; disabling may make the text inconsistent across windows, but the model becomes less prone to getting stuck in a failure loop")
-    parser.add_argument("--fp16", type=str2bool, default=False, help="whether to perform inference in fp16; True by default")
+    # parser.add_argument("--fp16", type=str2bool, default=False, help="whether to perform inference in fp16; True by default")
+    parser.add_argument("--fp16", action="store_true", help="whether to perform inference in fp16")
 
     parser.add_argument("--temperature_increment_on_fallback", type=optional_float, default=0.2, help="temperature to increase when falling back when the decoding fails to meet either of the thresholds below")
     parser.add_argument("--compression_ratio_threshold", type=optional_float, default=2.4, help="if the gzip compression ratio is higher than this value, treat the decoding as failed")
@@ -430,6 +439,10 @@ def cli():
     parser.add_argument("--export_onnx", action="store_true", help="whether to export onnx model or not")
     parser.add_argument("--use_kvcache", action="store_true", help="whether to use key-value cache or not")
     parser.add_argument("--split", action="store_true", help="whether to split the decoder model")
+    parser.add_argument("--quant", action="store_true", help="whether to quant the inputs and outputs of model")
+    parser.add_argument("--log", action="store_true", help="whether to log the inputs and outputs of model")
+    parser.add_argument("--runtime", type=str, default="untool", help="whether to use untool or SGInfer")
+    
     # fmt: on
 
     args = parser.parse_args().__dict__
@@ -467,13 +480,9 @@ def cli():
     from . import load_model
 
     model = load_model(args) 
-    args.pop("model_name")
-    args.pop("model_dir")
-    args.pop("bmodel_dir")
-    args.pop("inference")
-    args.pop("export_onnx")
-    args.pop("use_kvcache")
-    args.pop("split")
+    pop_list = ["model_name", "model_dir", "bmodel_dir", "inference", "export_onnx", "use_kvcache", "split", "quant", "log", "runtime"]
+    for arg in pop_list:
+        args.pop(arg)
 
     writer = get_writer(output_format, output_dir)
     word_options = ["highlight_words", "max_line_count", "max_line_width"]
@@ -495,6 +504,23 @@ def cli():
     print(f"call decoder loop times: {model.call_decoder_loop}")
     print("--- %s seconds ---" % (time.time() - start_time))
 
+    # if model.inference:
+    #     model.tool.destroy_un_runtime(model.runtime3)
+    #     model.tool.destroy_un_runtime(model.runtime4)
+    #     model.tool.destroy_un_runtime(model.runtime5)
+    #     for i in range(model.dims.n_text_layer * 2):
+    #         model.tool.destroy_un_runtime(model.kvcache_rearrange_runtime[i])
+    #     model.tool.destroy_model(model.decoder_main_handle)
+    #     model.tool.destroy_model(model.decoder_post_handle)
+    #     model.tool.destroy_model(model.decoder_loop_handle)
+    #     for i in range(model.dims.n_text_layer * 2):
+    #         model.tool.destroy_model(model.kvcache_rearrange_handle[i])
+    #     model.tool.free_bmrt(model.bmrt1)
+    #     model.tool.free_bmrt(model.bmrt2)
+    #     model.tool.free_bmrt(model.bmrt3)
+    #     for i in range(model.dims.n_text_layer * 2):
+    #         model.tool.destroy_model(model.kvcache_rearrange_bmrt[i])
+        # model.tool.free_bmhandle(model.handle)
 
 if __name__ == "__main__":
     cli()
