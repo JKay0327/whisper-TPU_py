@@ -6,8 +6,26 @@ __pycache__/
 .ipynb_checkpoints
 *.bmodel
 onnx_model/
+dist/
+*.npy
+*.npz
+*.onnx
+*.json
+*.srt
+*.tsv
+*.vtt
+*.log
+*.txt
+*.mp3
+*.flac
 build
+.vscode/*
+visual_tool/
+tmp/
+cpp/
 
 thumbs.db
 .DS_Store
 .idea
+
+!*/assets/*
