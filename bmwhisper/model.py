@@ -58,7 +58,9 @@ data_type_map = {
     6: np.int32
 }
 
-mylibrary = ctypes.CDLL('/usr/local/untpu/lib/libuntpu.so')
+# mylibrary = ctypes.CDLL('/usr/local/untpu/lib/libuntpu.so')
+mylibrary = ctypes.CDLL(os.path.join(os.path.dirname(__file__), '../third_party/untpu/lib/libuntpu.so'))
+
 class Tool:
     def __init__(self):
         self.base_init()
