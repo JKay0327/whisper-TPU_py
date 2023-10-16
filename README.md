@@ -17,3 +17,22 @@ You can install bmwhisper as follow:
 ```bash
 python setup.py install
 ```
+
+## Command-line usage
+### TPU mode
+Disable debug info:
+```bash
+export LOG_LEVEL=-1
+```
+Default model is `small`, start using whisper-TPU with `bmwhisper`:
+```bash
+bmwhisper demo.wav
+```
+You can change the model by adding `--model [model_name]`:
+```bash
+bmwhisper demo.wav --model medium
+```
+Model available now:
+* base
+* small
+* medium
