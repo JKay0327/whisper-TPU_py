@@ -35,8 +35,6 @@ from .utils import (
     str2bool,
 )
 
-from tpu_perf.infer import SGInfer
-
 if TYPE_CHECKING:
     from .model import Whisper
 

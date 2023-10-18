@@ -15,8 +15,6 @@ from .decoding import detect_language as detect_language_function
 from .transcribe import transcribe as transcribe_function
 from .untool import Tool, make_np2c, data_type, data_type_map
 
-from tpu_perf.infer import SGInfer, nptype
-
 @dataclass
 class ModelDimensions:
     n_mels: int

@@ -15,8 +15,6 @@ from .tokenizer import Tokenizer, get_tokenizer
 from .utils import compression_ratio
 from .untool import Tool, make_np2c, data_type, data_type_map
 
-from tpu_perf.infer import SGInfer, nptype
-
 if TYPE_CHECKING:
     from .model import Whisper
 

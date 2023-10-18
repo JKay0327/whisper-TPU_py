@@ -4,5 +4,4 @@ torch
 tqdm
 more-itertools
 tiktoken==0.3.3
-tpu-perf==1.2.24
 onnx==1.14.0
