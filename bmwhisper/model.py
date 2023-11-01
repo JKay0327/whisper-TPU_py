@@ -242,6 +242,7 @@ class Whisper(nn.Module):
         self.bmodel_dir = args["bmodel_dir"]
         self.beam_size = args["beam_size"]
         self.padding_size = args["padding_size"]
+        self.chip_mode = args["chip_mode"]
 
         # use the last half layers for alignment by default; see `set_alignment_heads()` below
         all_heads = torch.zeros(
@@ -279,7 +280,7 @@ class Whisper(nn.Module):
         assert os.path.exists(decoder_loop_bmodel_path), f"{decoder_loop_bmodel_path} not found"
         assert os.path.exists(kvcache_rearrange_bmodel_path), f"{kvcache_rearrange_bmodel_path} not found"
 
-        self.tool                  = Tool()
+        self.tool                  = Tool(self.chip_mode)
         self.handle                = self.tool.bmhandle(0)
         self.bmrt1                 = self.tool.bmrt(self.handle)
         self.bmrt2                 = self.tool.bmrt(self.handle)

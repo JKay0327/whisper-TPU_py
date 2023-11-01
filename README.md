@@ -20,13 +20,17 @@ python setup.py install
 
 ## Command-line usage
 ### TPU mode
-Disable debug info:
+Please disable debug info first:
 ```bash
 export LOG_LEVEL=-1
 ```
-Default model is `small`, start using whisper-TPU with `bmwhisper`:
+Default model is `small`, start using whisper-TPU with `bmwhisper` in this catalogue `whisper-TPU_py`:
 ```bash
 bmwhisper demo.wav
+```
+Or you can set the absolute path of bmodel dir like this `--bmodel_dir [bmodel_dir]`, and `bmwhisper` can be used anywhere:
+```bash
+bmwhisper demo.wav --bmodel_dir /your/path/to/bmodel_dir
 ```
 You can change the model by adding `--model [model_name]`:
 ```bash
@@ -36,3 +40,7 @@ Model available now:
 * base
 * small
 * medium
+You can change the chip mode by adding `--chip_mode soc`, default is `pcie`:
+```bash
+bmwhisper demo.wav --chip_mode soc
+```

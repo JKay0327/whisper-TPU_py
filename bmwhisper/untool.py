@@ -41,11 +41,11 @@ data_type_map = {
     6: np.int32
 }
 
-# mylibrary = ctypes.CDLL('/usr/local/untpu/lib/libuntpu.so')
-mylibrary = ctypes.CDLL(os.path.join(os.path.dirname(__file__), './third_party/untpu/lib/libuntpu.so'))
+# mylibrary = ctypes.CDLL(os.path.join(os.path.dirname(__file__), './third_party/untpu/lib/libuntpu.so'))
 
 class Tool:
-    def __init__(self):
+    def __init__(self, chip_mode="pcie"):
+        self.mylibrary = ctypes.CDLL(os.path.join(os.path.dirname(__file__), f'./third_party/untpu/lib/libuntpu_{chip_mode}.so'))
         self.base_init()
         self.tensor_init()
         self.model_init()
@@ -54,11 +54,11 @@ class Tool:
 
     def base_init(self):
         self.base = {}
-        self.bmhandle       = mylibrary.get_bmhandle
-        self.bmrt           = mylibrary.get_bmrt_
-        self.free_bmhandle  = mylibrary.free_bmhandle
-        self.free_bmrt      = mylibrary.free_bmrt_
-        self.print_data_fp32= mylibrary.print_data_fp32
+        self.bmhandle       = self.mylibrary.get_bmhandle
+        self.bmrt           = self.mylibrary.get_bmrt_
+        self.free_bmhandle  = self.mylibrary.free_bmhandle
+        self.free_bmrt      = self.mylibrary.free_bmrt_
+        self.print_data_fp32= self.mylibrary.print_data_fp32
         # set argtypes and restypes
         self.bmhandle.restype       = cpoint
         self.free_bmhandle.argtypes = [cpoint]
@@ -69,27 +69,27 @@ class Tool:
         self.print_data_fp32.argtypes=[vpoint, int_, int_, int_, int_]
     
     def tensor_init(self):
-        self.create_tensor             = mylibrary.create_tensor
-        self.destroy_tensor            = mylibrary.destroy_tensor
-        self.init_tensor               = mylibrary.init_tensor
-        self.init_tensor_by_shape      = mylibrary.init_tensor_by_shape
-        self.init_tensor_by_device_mem = mylibrary.init_tensor_by_device_mem
-        self.copy_data_from_numpy      = mylibrary.copy_data_from_numpy
-        self.device_to_host            = mylibrary.device_to_host
-        self.host_to_device            = mylibrary.host_to_device
-        self.force_host_to_device      = mylibrary.force_host_to_device
-        self.generate_random_data      = mylibrary.generate_random_data
-        self.print_data                = mylibrary.print_data
-        self.print_data_limit          = mylibrary.print_data_limit
-        self.print_bmtensor            = mylibrary.print_bmtensor
-        self.print_untensor            = mylibrary.print_untensor
-        self.shallow_copy_tensor_c     = mylibrary.shallow_copy_tensor_c
-        self.host_copy_tensor_c        = mylibrary.host_copy_tensor_c
+        self.create_tensor             = self.mylibrary.create_tensor
+        self.destroy_tensor            = self.mylibrary.destroy_tensor
+        self.init_tensor               = self.mylibrary.init_tensor
+        self.init_tensor_by_shape      = self.mylibrary.init_tensor_by_shape
+        self.init_tensor_by_device_mem = self.mylibrary.init_tensor_by_device_mem
+        self.copy_data_from_numpy      = self.mylibrary.copy_data_from_numpy
+        self.device_to_host            = self.mylibrary.device_to_host
+        self.host_to_device            = self.mylibrary.host_to_device
+        self.force_host_to_device      = self.mylibrary.force_host_to_device
+        self.generate_random_data      = self.mylibrary.generate_random_data
+        self.print_data                = self.mylibrary.print_data
+        self.print_data_limit          = self.mylibrary.print_data_limit
+        self.print_bmtensor            = self.mylibrary.print_bmtensor
+        self.print_untensor            = self.mylibrary.print_untensor
+        self.shallow_copy_tensor_c     = self.mylibrary.shallow_copy_tensor_c
+        self.host_copy_tensor_c        = self.mylibrary.host_copy_tensor_c
         # malloc 
-        self.malloc_device             = mylibrary.malloc_device
-        self.malloc_host               = mylibrary.malloc_host
+        self.malloc_device             = self.mylibrary.malloc_device
+        self.malloc_host               = self.mylibrary.malloc_host
         # print device 
-        self.print_device_data         = mylibrary.print_device_data_fp32
+        self.print_device_data         = self.mylibrary.print_device_data_fp32
         
         # type definition for tensor
         self.create_tensor.restype              = cpoint
@@ -130,20 +130,20 @@ class Tool:
         self.print_device_data.argtypes         = [cpoint, cpoint, int_, int_, bool_, vpoint]
     
     def model_init(self):
-        self.create_model                    = mylibrary.create_model
-        self.destroy_model                   = mylibrary.destroy_model
-        self.get_model_stage_num             = mylibrary.get_model_stage_num
-        self.get_model_input_num             = mylibrary.get_model_input_num
-        self.get_model_output_num            = mylibrary.get_model_output_num
-        self.get_model_input_dtype           = mylibrary.get_model_input_dtype
-        self.get_model_output_dtype          = mylibrary.get_model_output_dtype
-        self.get_model_input_name            = mylibrary.get_model_input_name
-        self.get_model_output_name           = mylibrary.get_model_output_name
-        self.get_model_input_dim_by_stage    = mylibrary.get_model_input_dim_by_stage
-        self.get_model_output_dim_by_stage   = mylibrary.get_model_output_dim_by_stage
-        self.get_model_input_shape_by_stage  = mylibrary.get_model_input_shape_by_stage
-        self.get_model_output_shape_by_stage = mylibrary.get_model_output_shape_by_stage
-        # self.get_coeff_v_start               = mylibrary.get_coeff_v_start
+        self.create_model                    = self.mylibrary.create_model
+        self.destroy_model                   = self.mylibrary.destroy_model
+        self.get_model_stage_num             = self.mylibrary.get_model_stage_num
+        self.get_model_input_num             = self.mylibrary.get_model_input_num
+        self.get_model_output_num            = self.mylibrary.get_model_output_num
+        self.get_model_input_dtype           = self.mylibrary.get_model_input_dtype
+        self.get_model_output_dtype          = self.mylibrary.get_model_output_dtype
+        self.get_model_input_name            = self.mylibrary.get_model_input_name
+        self.get_model_output_name           = self.mylibrary.get_model_output_name
+        self.get_model_input_dim_by_stage    = self.mylibrary.get_model_input_dim_by_stage
+        self.get_model_output_dim_by_stage   = self.mylibrary.get_model_output_dim_by_stage
+        self.get_model_input_shape_by_stage  = self.mylibrary.get_model_input_shape_by_stage
+        self.get_model_output_shape_by_stage = self.mylibrary.get_model_output_shape_by_stage
+        # self.get_coeff_v_start               = self.mylibrary.get_coeff_v_start
         # type definition for tensor
         # un_model* create_model(const char* bmodel, void* p_bmrt)
         self.create_model.argtypes                    = [spoint, cpoint]
@@ -229,25 +229,25 @@ class Tool:
         self.model_info = get_model_info
     
     def runtime_init(self):
-        self.create_un_runtime     = mylibrary.create_un_runtime
-        self.destroy_un_runtime    = mylibrary.free_un_runtime
-        self.set_bmodel_info       = mylibrary.set_bmodel_info
-        self.set_stage             = mylibrary.set_stage
-        self.init_all_tensors      = mylibrary.init_all_tensors
-        self.get_input_num         = mylibrary.get_input_num
-        self.get_output_num        = mylibrary.get_output_num
-        self.get_input_tensor      = mylibrary.get_input_tensor
-        self.get_output_tensor     = mylibrary.get_output_tensor
-        self.set_input_tensor      = mylibrary.set_input_tensor
-        self.set_output_tensor     = mylibrary.set_output_tensor
-        # self.set_tensors_shape     = mylibrary.set_tensors_shape
-        self.malloc_device_address = mylibrary.malloc_device_address
-        self.generate_input_data   = mylibrary.generate_input_data
-        self.inference             = mylibrary.inference
-        self.copy_input_data_to_device = mylibrary.copy_input_data_to_device
-        self.copy_output_data_to_host  = mylibrary.copy_output_data_to_host
-        self.print_output_data     = mylibrary.print_output_data
-        self.print_input_data      = mylibrary.print_input_data
+        self.create_un_runtime     = self.mylibrary.create_un_runtime
+        self.destroy_un_runtime    = self.mylibrary.free_un_runtime
+        self.set_bmodel_info       = self.mylibrary.set_bmodel_info
+        self.set_stage             = self.mylibrary.set_stage
+        self.init_all_tensors      = self.mylibrary.init_all_tensors
+        self.get_input_num         = self.mylibrary.get_input_num
+        self.get_output_num        = self.mylibrary.get_output_num
+        self.get_input_tensor      = self.mylibrary.get_input_tensor
+        self.get_output_tensor     = self.mylibrary.get_output_tensor
+        self.set_input_tensor      = self.mylibrary.set_input_tensor
+        self.set_output_tensor     = self.mylibrary.set_output_tensor
+        # self.set_tensors_shape     = self.mylibrary.set_tensors_shape
+        self.malloc_device_address = self.mylibrary.malloc_device_address
+        self.generate_input_data   = self.mylibrary.generate_input_data
+        self.inference             = self.mylibrary.inference
+        self.copy_input_data_to_device = self.mylibrary.copy_input_data_to_device
+        self.copy_output_data_to_host  = self.mylibrary.copy_output_data_to_host
+        self.print_output_data     = self.mylibrary.print_output_data
+        self.print_input_data      = self.mylibrary.print_input_data
         # set argtypes and restype
         # un_run* create_un_runtime(bm_handle_t p_bm_handle)
         self.create_un_runtime.argtypes = [cpoint]

@@ -412,6 +412,7 @@ def cli():
     parser.add_argument("--max_line_count", type=optional_int, default=None, help="(requires --word_timestamps True) the maximum number of lines in a segment")
     parser.add_argument("--threads", type=optional_int, default=0, help="number of threads used by torch for CPU inference; supercedes MKL_NUM_THREADS/OMP_NUM_THREADS")
     parser.add_argument("--padding_size", type=optional_int, default=448, help="max pre-allocation size for the key-value cache")
+    parser.add_argument("--chip_mode", default="pcie", choices=["pcie", "soc"], help="name of the Whisper model to use")
     
     # fmt: on
 
@@ -441,7 +442,7 @@ def cli():
     from . import load_model
 
     model = load_model(args) 
-    pop_list = ["model_name", "model_dir", "bmodel_dir"]
+    pop_list = ["model_name", "model_dir", "bmodel_dir", "chip_mode"]
     for arg in pop_list:
         args.pop(arg)
 
