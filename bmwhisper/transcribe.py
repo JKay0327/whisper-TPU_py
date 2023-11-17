@@ -413,13 +413,14 @@ def cli():
     parser.add_argument("--threads", type=optional_int, default=0, help="number of threads used by torch for CPU inference; supercedes MKL_NUM_THREADS/OMP_NUM_THREADS")
     parser.add_argument("--padding_size", type=optional_int, default=448, help="max pre-allocation size for the key-value cache")
     parser.add_argument("--chip_mode", default="pcie", choices=["pcie", "soc"], help="name of the Whisper model to use")
-    
+    parser.add_argument("--loop_profile", action="store_true", help="whether to print loop times")
     # fmt: on
 
     args = parser.parse_args().__dict__
     args["model_name"] = args.pop("model")
     output_dir: str = args.pop("output_dir")
     output_format: str = args.pop("output_format")
+    loop_prfile = args.pop("loop_profile")
     os.makedirs(output_dir, exist_ok=True)
 
     model_name = args["model_name"]
@@ -465,6 +466,8 @@ def cli():
         result = transcribe(model, audio_path, temperature=temperature, **args)
         writer(result, audio_path, writer_args)
         cpu_time = time.time() - audio_start_time - model.time
+        if loop_prfile:
+            model.print_cnt()
         print()
         print(f"Total tpu inference time: {model.time}s")
         print(f"Total cpu inference time: {cpu_time}s")
