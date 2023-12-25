@@ -1,5 +1,8 @@
 # whisper-TPU python
 
+## Remark!!!
+> Trying this project, please use code on [`release`]{https://github.com/JKay0327/whisper-TPU_py/tree/release} branch and ask owner to get released bmodel.
+
 ## Environment
 The codebase is expected to be compatible with Python 3.8-3.11 and recent PyTorch versions. The codebase also depends on a few Python packages, most notably OpenAI's tiktoken for their fast tokenizer implementation. You can setup the environment with the following command:
 ```bash
