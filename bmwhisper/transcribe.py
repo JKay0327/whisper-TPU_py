@@ -420,7 +420,7 @@ def cli():
     args["model_name"] = args.pop("model")
     output_dir: str = args.pop("output_dir")
     output_format: str = args.pop("output_format")
-    loop_prfile = args.pop("loop_profile")
+    loop_profile = args.pop("loop_profile")
     os.makedirs(output_dir, exist_ok=True)
 
     model_name = args["model_name"]
@@ -466,7 +466,7 @@ def cli():
         result = transcribe(model, audio_path, temperature=temperature, **args)
         writer(result, audio_path, writer_args)
         cpu_time = time.time() - audio_start_time - model.time
-        if loop_prfile:
+        if loop_profile:
             model.print_cnt()
         print()
         print(f"Total tpu inference time: {model.time}s")
