@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Default values for parameters
-model="small"
+model="small" # base, small, medium
 beam_size=5
 padding_size=448
 compare=false
-use_kvcache=false
-quant=false
+use_kvcache=true
+quant=true
 process=""
 
 bmodel_dir="bmodel"
@@ -141,7 +141,8 @@ function gen_bmodel() {
     model_deploy_cmd="model_deploy.py --mlir transformed.mlir \
         --quantize F16 \
         --chip bm1684x \
-        --model $bmodel_file"
+        --model $bmodel_file \
+        --debug"
 
     if [ "$compare" = true ]; then
         model_transform_cmd="$model_transform_cmd --test_input ../${test_input} \
@@ -187,6 +188,8 @@ if [ -z "$process" ]; then
         process_list+=("decoder_main" "decoder_loop")
     fi
     echo "process list: ${process_list[@]}"
+
+    # process_list=("decoder_main_with_kvcache" "decoder_loop_with_kvcache")
 
     for process_name in "${process_list[@]}"; do
         model_name="${process_name}_${model}_${beam_size}beam_${padding_size}pad"
@@ -288,7 +291,9 @@ if [ -z "$process" ]; then
         echo "[Cmd] cp $bmodel_file ../../../bmodel/"
         cp $bmodel_file ../../../bmodel/
         popd
-        rm -rf $bmodel_file
+        # rm -rf $bmodel_file
+        rm -rf *.onnx
+        rm -rf *.npz
         popd
     done
 else 
@@ -315,6 +320,8 @@ else
     # exit 1
     gen_bmodel
     popd
+    rm -rf *.onnx
+    rm -rf *.npz
     popd
 fi
 
