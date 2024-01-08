@@ -44,3 +44,24 @@ You can change the chip mode by adding `--chip_mode soc`, default is `pcie`:
 ```bash
 bmwhisper demo.wav --chip_mode soc
 ```
+
+## Http api usage
+
+### Start api service
+`python api.py` 
+    
+    This service depends on the whisper command. Please install whisper successfully before using this service.
+
+### upload task
+- url `/upload_task`
+- method `post`
+- form parameter `{'file': audio file}`
+- response `{'task_id': task_id}`
+- description `upload an audio file in form, the key is 'file'. The system will add the requested file to the task queue and reutrn a task_id at the same time.`
+
+### download result file
+- url `check_task`
+- method `post`
+- json parameter `{'task_id': task_id}`
+- response `{"state": task state}` or `.zip result file`
+- description `check if the task with task_id is completed. If completed, return the result file; if not, return the task status. `
