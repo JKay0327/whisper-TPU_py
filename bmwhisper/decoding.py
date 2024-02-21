@@ -37,7 +37,9 @@ def detect_language(
         list of dictionaries containing the probability distribution over all languages.
     """
     if tokenizer is None:
-        tokenizer = get_tokenizer(model.is_multilingual)
+        tokenizer = get_tokenizer(
+            model.is_multilingual, num_languages=model.num_languages
+        )
     if (
         tokenizer.language is None
         or tokenizer.language_token not in tokenizer.sot_sequence
@@ -91,22 +93,26 @@ def detect_language(
             #     mel_out = torch.from_numpy(result[0])
         else:
             # import pdb; pdb.set_trace()
-            if model.export_onnx:
-                onnx_input_names = ["mel"]
-                onnx_output_names = ["audio_features",]
-                onnx_input_dict = {"mel":mel}
+            if model.export_mode:
+                pass
                 model_name= f"encoder_{model.model_name}_{model.beam_size}beam_{model.padding_size}pad"
-
+                onnx_input_dict = {"mel":mel}
                 np.savez(model_name + "_inputs.npz", **onnx_input_dict)
-                torch.onnx.export(
-                    model.encoder,
-                    (mel,),  # Pass the actual input data
-                    model_name + ".onnx",
-                    verbose=True,
-                    input_names=onnx_input_names,  # Provide input names
-                    output_names=onnx_output_names,  # Provide output names
-                    opset_version=15,  # ONNX opset version to use
-                )
+                if model.export_mode == "onnx":
+                    onnx_input_names = ["mel"]
+                    onnx_output_names = ["audio_features",]
+
+                    torch.onnx.export(
+                        model.encoder,
+                        (mel,),  # Pass the actual input data
+                        model_name + ".onnx",
+                        verbose=True,
+                        input_names=onnx_input_names,  # Provide input names
+                        output_names=onnx_output_names,  # Provide output names
+                        opset_version=15,  # ONNX opset version to use
+                    )
+                elif model.export_mode == "pt":
+                    torch.jit.trace(model.encoder, (mel,)).save(model_name + ".pt")
             mel_out = model.encoder(mel)
         if model.log:
             import pdb; pdb.set_trace()
@@ -411,7 +417,7 @@ class LogitsInferenceFirstlyMainProcess(nn.Module):
             x = x + block.mlp(block.mlp_ln(x))
             i += 1
         if self.use_kvcache:
-            return x, self_attention_kcache, self_attention_vcache, cross_attention_kcache, cross_attention_vcache
+            return x, tuple(self_attention_kcache), tuple(self_attention_vcache), tuple(cross_attention_kcache), tuple(cross_attention_vcache)
         return x
 
 class LogitsInferenceFirstlyPostProcess(nn.Module):
@@ -509,8 +515,6 @@ class LogitsInferenceLoopWithKVCache(nn.Module):
         for block in self.blocks:
             attn_ln_x = block.attn_ln(x)
             q = block.attn.query(attn_ln_x)
-            # k = torch.cat([self_attention_kcache[i], block.attn.key(attn_ln_x)], dim=1)
-            # v = torch.cat([self_attention_vcache[i], block.attn.value(attn_ln_x)], dim=1)
             k = torch.cat([self_attention_kcache[i][:, 1:, ...], block.attn.key(attn_ln_x)], dim=1)
             v = torch.cat([self_attention_vcache[i][:, 1:, ...], block.attn.value(attn_ln_x)], dim=1)
 
@@ -577,7 +581,7 @@ class LogitsInferenceLoopWithKVCache(nn.Module):
             x @ torch.transpose(self.decoder.token_embedding.weight, 0, 1)
         ).float()
         
-        return logits[:, -1], sattn_kcache, sattn_vcache
+        return logits[:, -1], tuple(sattn_kcache), tuple(sattn_vcache)
 
 class PyTorchInference(Inference):
     def __init__(self, model: "Whisper", initial_token_length: int):
@@ -971,7 +975,10 @@ class DecodingTask:
         
         language = options.language or "en"
         tokenizer = get_tokenizer(
-            model.is_multilingual, language=language, task=options.task
+            model.is_multilingual,
+            num_languages=model.num_languages,
+            language=language,
+            task=options.task,
         )
         self.tokenizer: Tokenizer = tokenizer
         self.options: DecodingOptions = self._verify_options(options)
@@ -1221,8 +1228,8 @@ class DecodingTask:
 
         try:
             for i in range(self.sample_len):
-                print("{:=^80}".format(f" start {i} "))
-                print(f"tokens: {tokens}")
+                # print("{:=^80}".format(f" start {i} "))
+                # print(f"tokens: {tokens}")
                 # print(f"audio_features: {audio_features}")
                 # import pdb; pdb.set_trace()
                 if i == 0 or not self.model.use_kvcache:
@@ -1245,35 +1252,39 @@ class DecodingTask:
                     #     print(f"[Log] input:")
                     #     print(f"[Log] bmodel_input: {(tokens_input, audio_features, positional_embedding_input, mask,)}")
                     #     import pdb; pdb.set_trace()
-                    if self.model.export_onnx:
-                        onnx_input = (tokens_input, audio_features, positional_embedding_input, mask,)
-                        onnx_input_names = ["tokens_input", "audio_features", "positional_embedding_input", "mask"]
-                        onnx_output_names = ["x",]
-                        onnx_input_dict = {}
-                        for name, value in zip(onnx_input_names, onnx_input):
-                            onnx_input_dict[name] = value
+                    if self.model.export_mode:
+                        pass
+                        input = (tokens_input, audio_features, positional_embedding_input, mask,)
+                        input_dict = {}
+                        input_names = ["tokens_input", "audio_features", "positional_embedding_input", "mask"]
+                        output_names = ["x",]
+                        for name, value in zip(input_names, input):
+                            input_dict[name] = value
                         if self.model.use_kvcache:
                             model_name = f"decoder_main_with_kvcache_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_output_names.append(f"self_attn_kcache_in.{idx}")
+                                output_names.append(f"self_attn_kcache_in.{idx}")
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_output_names.append(f"self_attn_vcache_in.{idx}")
+                                output_names.append(f"self_attn_vcache_in.{idx}")
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_output_names.append(f"cross_attn_kcache_in.{idx}")
+                                output_names.append(f"cross_attn_kcache_in.{idx}")
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_output_names.append(f"cross_attn_vcache_in.{idx}")
+                                output_names.append(f"cross_attn_vcache_in.{idx}")
                         else:
                             model_name = f"decoder_main_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
-                        np.savez(model_name + "_inputs.npz", **onnx_input_dict)
-                        torch.onnx.export(
-                            self.inference_main_process,
-                            onnx_input,  # Pass the actual input data
-                            model_name + ".onnx",
-                            verbose=True,
-                            input_names=onnx_input_names,  # Provide input names
-                            output_names=onnx_output_names,  # Provide output names
-                            opset_version=15,  # ONNX opset version to use
-                        )
+                        np.savez(model_name + "_inputs.npz", **input_dict)
+                        if self.model.export_mode == "onnx":
+                            torch.onnx.export(
+                                self.inference_main_process,
+                                input,  # Pass the actual input data
+                                model_name + ".onnx",
+                                verbose=True,
+                                input_names=input_names,  # Provide input names
+                                output_names=output_names,  # Provide output names
+                                opset_version=15,  # ONNX opset version to use
+                            )
+                        elif self.model.export_mode == "pt":
+                            torch.jit.trace(self.inference_main_process, input).save(model_name + ".pt")
                     if self.model.use_kvcache:
                         x, self_attention_kcache, self_attention_vcache, cross_attention_kcache, cross_attention_vcache = self.inference_main_process(
                             tokens_input, 
@@ -1281,6 +1292,10 @@ class DecodingTask:
                             positional_embedding_input, 
                             mask, 
                             )
+                        self_attention_kcache = list(self_attention_kcache)
+                        self_attention_vcache = list(self_attention_vcache)
+                        cross_attention_kcache = list(cross_attention_kcache)
+                        cross_attention_vcache = list(cross_attention_vcache)
                     else:
                         x = self.inference_main_process(
                             tokens_input, 
@@ -1291,23 +1306,28 @@ class DecodingTask:
                     # import pdb; pdb.set_trace()
                     x_sot = x[:, padding_num - initial_tokens_length + self.sot_index:padding_num - initial_tokens_length + self.sot_index + 1]
                     x_last = x[:, -1:]
-                    if self.model.export_onnx:
-                        onnx_input = (x_sot, x_last)
-                        onnx_input_names = ["x_sot", "x_last"]
-                        onnx_output_names = ["logits", "no_speech_probs"]
-                        onnx_input_dict = {}
-                        for name, value in zip(onnx_input_names, onnx_input):
-                            onnx_input_dict[name] = value
-                        np.savez(f"decoder_post_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad_inputs.npz", **onnx_input_dict)
-                        torch.onnx.export(
-                                self.inference_post_process,
-                                onnx_input,  # Pass the actual input data
-                                f"decoder_post_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad.onnx",
-                                verbose=True,
-                                input_names=onnx_input_names,  # Provide input names
-                                output_names=onnx_output_names,  # Provide output names
-                                opset_version=15,  # ONNX opset version to use
-                            )
+                    if self.model.export_mode:
+                        pass
+                        model_name = f"decoder_post_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
+                        input = (x_sot, x_last)
+                        input_dict = {}
+                        input_names = ["x_sot", "x_last"]
+                        output_names = ["logits", "no_speech_probs"]
+                        for name, value in zip(input_names, input):
+                            input_dict[name] = value
+                        np.savez(model_name + "_inputs.npz", **input_dict)
+                        if self.model.export_mode == "onnx":
+                            torch.onnx.export(
+                                    self.inference_post_process,
+                                    input,  # Pass the actual input data
+                                    model_name + ".onnx",
+                                    verbose=True,
+                                    input_names=input_names,  # Provide input names
+                                    output_names=output_names,  # Provide output names
+                                    opset_version=15,  # ONNX opset version to use
+                                )
+                        elif self.model.export_mode == "pt":
+                            torch.jit.trace(self.inference_post_process, input).save(model_name + ".pt")
                     logits, no_speech_probs = self.inference_post_process(x_sot, x_last)
                     no_speech_probs = no_speech_probs.tolist()
                     # if self.model.use_kvcache:
@@ -1323,45 +1343,48 @@ class DecodingTask:
                     #     print(f"[Log] decoder_loop_infer")
                     #     print(f"[Log] input:")
                     #     import pdb; pdb.set_trace()
-                    if self.model.export_onnx:
+                    if self.model.export_mode:
                         if self.model.use_kvcache:
-                            onnx_input = (tokens_input, positional_embedding_input, mask, self_attention_kcache, self_attention_vcache, cross_attention_kcache, cross_attention_vcache,)
+                            input = (tokens_input, positional_embedding_input, mask, self_attention_kcache, self_attention_vcache, cross_attention_kcache, cross_attention_vcache,)
                             npz_input = (tokens_input, positional_embedding_input, mask, *self_attention_kcache, *self_attention_vcache, *cross_attention_kcache, *cross_attention_vcache,)
-                            onnx_input_names = ["tokens_input", "positional_embedding_input", "mask",]
-                            onnx_output_names = ["logits",]
+                            input_names = ["tokens_input", "positional_embedding_input", "mask",]
+                            output_names = ["logits",]
                             model_name = f"decoder_loop_with_kvcache_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_input_names.append(f"self_attn_kcache_in.{idx}")
+                                input_names.append(f"self_attn_kcache_in.{idx}")
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_input_names.append(f"self_attn_vcache_in.{idx}")
+                                input_names.append(f"self_attn_vcache_in.{idx}")
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_input_names.append(f"cross_attn_kcache_in.{idx}")
+                                input_names.append(f"cross_attn_kcache_in.{idx}")
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_input_names.append(f"cross_attn_vcache_in.{idx}")
+                                input_names.append(f"cross_attn_vcache_in.{idx}")
 
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_output_names.append(f"self_attn_kcache_out.{idx}")
+                                output_names.append(f"self_attn_kcache_out.{idx}")
                             for idx in range(self.model.dims.n_text_layer):
-                                onnx_output_names.append(f"self_attn_vcache_out.{idx}")
+                                output_names.append(f"self_attn_vcache_out.{idx}")
                         else:
-                            onnx_input = (tokens_input, audio_features, positional_embedding_input, mask,)
+                            input = (tokens_input, audio_features, positional_embedding_input, mask,)
                             npz_input = (tokens_input, audio_features, positional_embedding_input, mask,)
-                            onnx_input_names = ["tokens_input", "audio_features", "positional_embedding_input", "mask",]
-                            onnx_output_names = ["logits",]
+                            input_names = ["tokens_input", "audio_features", "positional_embedding_input", "mask",]
+                            output_names = ["logits",]
                             model_name = f"decoder_loop_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
-                        onnx_input_dict = {}
-                        for name, value in zip(onnx_input_names, npz_input):
-                            onnx_input_dict[name] = value
-                        np.savez(model_name + "_inputs.npz", **onnx_input_dict)
-                        torch.onnx.export(
-                            self.inference_loop,
-                            onnx_input,  # Pass the actual input data
-                            model_name + ".onnx",
-                            verbose=True,
-                            input_names=onnx_input_names,  # Provide input names
-                            output_names=onnx_output_names,  # Provide output names
-                            opset_version=15,  # ONNX opset version to use
-                        )
+                        input_dict = {}
+                        for name, value in zip(input_names, npz_input):
+                            input_dict[name] = value
+                        np.savez(model_name + "_inputs.npz", **input_dict)
+                        if self.model.export_mode == "onnx":
+                            torch.onnx.export(
+                                self.inference_loop,
+                                input,  # Pass the actual input data
+                                model_name + ".onnx",
+                                verbose=True,
+                                input_names=input_names,  # Provide input names
+                                output_names=output_names,  # Provide output names
+                                opset_version=15,  # ONNX opset version to use
+                            )
+                        elif self.model.export_mode == "pt":
+                            torch.jit.trace(self.inference_loop, input).save(model_name + ".pt")
                         exit()
                     else:
                         if self.model.use_kvcache:
@@ -1374,6 +1397,10 @@ class DecodingTask:
                                 cross_attention_kcache, 
                                 cross_attention_vcache
                             )
+                            self_attention_kcache = list(self_attention_kcache)
+                            self_attention_vcache = list(self_attention_vcache)
+                            cross_attention_kcache = list(cross_attention_kcache)
+                            cross_attention_vcache = list(cross_attention_vcache)
                         else:
                             logits = self.inference_loop(tokens_input, audio_features, positional_embedding_input, mask)
                     # if self.model.use_kvcache:
@@ -1395,6 +1422,8 @@ class DecodingTask:
                     # print(f"logits dtype: {logits.dtype}")
                     # print(i)
                     # import pdb; pdb.set_trace()
+                    self_attention_kcache = list(self_attention_kcache)
+                    self_attention_vcache = list(self_attention_vcache)
                     tokens, completed = self.decoder.update(tokens, 
                                                             logits.float(), 
                                                             sum_logprobs, 
@@ -1791,35 +1820,39 @@ class DecodingTask:
                         #     print(f"[Log] input:")
                         #     print(f"[Log] bmodel_input: {(tokens_input, audio_features, positional_embedding_input, mask,)}")
                         #     import pdb; pdb.set_trace()
-                        if self.model.export_onnx:
-                            onnx_input = (tokens_input, audio_features, positional_embedding_input, mask,)
-                            onnx_input_names = ["tokens_input", "audio_features", "positional_embedding_input", "mask"]
-                            onnx_output_names = ["x",]
-                            onnx_input_dict = {}
-                            for name, value in zip(onnx_input_names, onnx_input):
-                                onnx_input_dict[name] = value
+                        if self.model.export_mode:
+                            pass
+                            input = (tokens_input, audio_features, positional_embedding_input, mask,)
+                            input_names = ["tokens_input", "audio_features", "positional_embedding_input", "mask"]
+                            output_names = ["x",]
+                            input_dict = {}
+                            for name, value in zip(input_names, input):
+                                input_dict[name] = value
                             if self.model.use_kvcache:
                                 model_name = f"decoder_main_with_kvcache_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_output_names.append(f"self_attn_kcache_in.{idx}")
+                                    output_names.append(f"self_attn_kcache_in.{idx}")
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_output_names.append(f"self_attn_vcache_in.{idx}")
+                                    output_names.append(f"self_attn_vcache_in.{idx}")
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_output_names.append(f"cross_attn_kcache_in.{idx}")
+                                    output_names.append(f"cross_attn_kcache_in.{idx}")
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_output_names.append(f"cross_attn_vcache_in.{idx}")
+                                    output_names.append(f"cross_attn_vcache_in.{idx}")
                             else:
                                 model_name = f"decoder_main_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
-                            np.savez(model_name + "_inputs.npz", **onnx_input_dict)
-                            torch.onnx.export(
-                                self.inference_main_process,
-                                onnx_input,  # Pass the actual input data
-                                model_name + ".onnx",
-                                verbose=True,
-                                input_names=onnx_input_names,  # Provide input names
-                                output_names=onnx_output_names,  # Provide output names
-                                opset_version=15,  # ONNX opset version to use
-                            )
+                            np.savez(model_name + "_inputs.npz", **input_dict)
+                            if self.model.export_mode == "onnx":
+                                torch.onnx.export(
+                                    self.inference_main_process,
+                                    input,  # Pass the actual input data
+                                    model_name + ".onnx",
+                                    verbose=True,
+                                    input_names=input_names,  # Provide input names
+                                    output_names=output_names,  # Provide output names
+                                    opset_version=15,  # ONNX opset version to use
+                                )
+                            elif self.model.export_mode == "pt":
+                                torch.jit.trace(self.inference_main_process, input).save(model_name + ".pt")
                         if self.model.use_kvcache:
                             x, self_attention_kcache, self_attention_vcache, cross_attention_kcache, cross_attention_vcache = self.inference_main_process(
                                 tokens_input, 
@@ -1837,23 +1870,26 @@ class DecodingTask:
                         import pdb; pdb.set_trace()
                         x_sot = x[:, padding_num - initial_tokens_length + self.sot_index:padding_num - initial_tokens_length + self.sot_index + 1]
                         x_last = x[:, -1:]
-                        if self.model.export_onnx:
-                            onnx_input = (x_sot, x_last)
-                            onnx_input_names = ["x_sot", "x_last"]
-                            onnx_output_names = ["logits", "no_speech_probs"]
-                            onnx_input_dict = {}
-                            for name, value in zip(onnx_input_names, onnx_input):
-                                onnx_input_dict[name] = value
-                            np.savez(f"decoder_post_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad_inputs.npz", **onnx_input_dict)
-                            torch.onnx.export(
-                                    self.inference_post_process,
-                                    onnx_input,  # Pass the actual input data
-                                    f"decoder_post_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad.onnx",
-                                    verbose=True,
-                                    input_names=onnx_input_names,  # Provide input names
-                                    output_names=onnx_output_names,  # Provide output names
-                                    opset_version=15,  # ONNX opset version to use
-                                )
+                        if self.model.export_mode:
+                            input = (x_sot, x_last)
+                            input_names = ["x_sot", "x_last"]
+                            output_names = ["logits", "no_speech_probs"]
+                            input_dict = {}
+                            for name, value in zip(input_names, input):
+                                input_dict[name] = value
+                            np.savez(f"decoder_post_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad_inputs.npz", **input_dict)
+                            if self.model.export_mode == "onnx":
+                                torch.onnx.export(
+                                        self.inference_post_process,
+                                        input,  # Pass the actual input data
+                                        f"decoder_post_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad.onnx",
+                                        verbose=True,
+                                        input_names=input_names,  # Provide input names
+                                        output_names=output_names,  # Provide output names
+                                        opset_version=15,  # ONNX opset version to use
+                                    )
+                            elif self.model.export_mode == "pt":
+                                torch.jit.trace(self.inference_post_process, input).save(f"decoder_post_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad.pt")
                         logits, no_speech_probs = self.inference_post_process(x_sot, x_last)
                         no_speech_probs = no_speech_probs.tolist()
                     # if self.model.use_kvcache:
@@ -1916,45 +1952,48 @@ class DecodingTask:
                         #     else:
                         #         print(f"[Log] bmodel_input: {(tokens_input, audio_features, positional_embedding_input, mask,)}")
                         #     import pdb; pdb.set_trace()
-                        if self.model.export_onnx:
+                        if self.model.export_mode:
                             if self.model.use_kvcache:
-                                onnx_input = (tokens_input, positional_embedding_input, mask, self_attention_kcache, self_attention_vcache, cross_attention_kcache, cross_attention_vcache,)
+                                input = (tokens_input, positional_embedding_input, mask, self_attention_kcache, self_attention_vcache, cross_attention_kcache, cross_attention_vcache,)
                                 npz_input = (tokens_input, positional_embedding_input, mask, *self_attention_kcache, *self_attention_vcache, *cross_attention_kcache, *cross_attention_vcache,)
-                                onnx_input_names = ["tokens_input", "positional_embedding_input", "mask",]
-                                onnx_output_names = ["logits",]
+                                input_names = ["tokens_input", "positional_embedding_input", "mask",]
+                                output_names = ["logits",]
                                 model_name = f"decoder_loop_with_kvcache_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_input_names.append(f"self_attn_kcache_in.{idx}")
+                                    input_names.append(f"self_attn_kcache_in.{idx}")
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_input_names.append(f"self_attn_vcache_in.{idx}")
+                                    input_names.append(f"self_attn_vcache_in.{idx}")
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_input_names.append(f"cross_attn_kcache_in.{idx}")
+                                    input_names.append(f"cross_attn_kcache_in.{idx}")
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_input_names.append(f"cross_attn_vcache_in.{idx}")
+                                    input_names.append(f"cross_attn_vcache_in.{idx}")
 
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_output_names.append(f"self_attn_kcache_out.{idx}")
+                                    output_names.append(f"self_attn_kcache_out.{idx}")
                                 for idx in range(self.model.dims.n_text_layer):
-                                    onnx_output_names.append(f"self_attn_vcache_out.{idx}")
+                                    output_names.append(f"self_attn_vcache_out.{idx}")
                             else:
-                                onnx_input = (tokens_input, audio_features, positional_embedding_input, mask,)
+                                input = (tokens_input, audio_features, positional_embedding_input, mask,)
                                 npz_input = (tokens_input, audio_features, positional_embedding_input, mask,)
-                                onnx_input_names = ["tokens_input", "audio_features", "positional_embedding_input", "mask",]
-                                onnx_output_names = ["logits",]
+                                input_names = ["tokens_input", "audio_features", "positional_embedding_input", "mask",]
+                                output_names = ["logits",]
                                 model_name = f"decoder_loop_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
-                            onnx_input_dict = {}
-                            for name, value in zip(onnx_input_names, npz_input):
-                                onnx_input_dict[name] = value
-                            np.savez(model_name + "_inputs.npz", **onnx_input_dict)
-                            torch.onnx.export(
-                                self.inference_loop,
-                                onnx_input,  # Pass the actual input data
-                                model_name + ".onnx",
-                                verbose=True,
-                                input_names=onnx_input_names,  # Provide input names
-                                output_names=onnx_output_names,  # Provide output names
-                                opset_version=15,  # ONNX opset version to use
-                            )
+                            input_dict = {}
+                            for name, value in zip(input_names, npz_input):
+                                input_dict[name] = value
+                            np.savez(model_name + "_inputs.npz", **input_dict)
+                            if self.model.export_mode == "onnx":
+                                torch.onnx.export(
+                                    self.inference_loop,
+                                    input,  # Pass the actual input data
+                                    model_name + ".onnx",
+                                    verbose=True,
+                                    input_names=input_names,  # Provide input names
+                                    output_names=output_names,  # Provide output names
+                                    opset_version=15,  # ONNX opset version to use
+                                )
+                            elif self.model.export_mode == "pt":
+                                torch.jit.trace(self.inference_loop, input).save(model_name + ".pt")
                             exit()
                         else:
                             if self.model.use_kvcache:

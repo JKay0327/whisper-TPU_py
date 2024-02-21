@@ -83,7 +83,7 @@ elif [ "$model" == "medium" ]; then
 	n_text_state=1024
 	n_text_head=16
 	n_text_layer=24
-elif [ "$model" == "large" ]; then
+elif [ "$model" == "large-v2" ]; then
 	n_text_state=1280
 	n_text_head=20
 	n_text_layer=32

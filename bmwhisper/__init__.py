@@ -25,7 +25,8 @@ _MODELS = {
     "medium": "https://openaipublic.azureedge.net/main/whisper/models/345ae4da62f9b3d59415adc60127b97c714f32e89e936602e85993674d08dcb1/medium.pt",
     "large-v1": "https://openaipublic.azureedge.net/main/whisper/models/e4b87e7e0bf463eb8e6956e646f1e277e901512310def2c24bf0e11bd3c28e9a/large-v1.pt",
     "large-v2": "https://openaipublic.azureedge.net/main/whisper/models/81f7c96c852ee8fc832187b0132e569d6c3065a3252ed18e56effd0b6a73e524/large-v2.pt",
-    "large": "https://openaipublic.azureedge.net/main/whisper/models/81f7c96c852ee8fc832187b0132e569d6c3065a3252ed18e56effd0b6a73e524/large-v2.pt",
+    "large-v3": "https://openaipublic.azureedge.net/main/whisper/models/e5b1a55b89c1367dacf97e3e19bfd829a01529dbfdeefa8caeb59b3f1b81dadb/large-v3.pt",
+    "large": "https://openaipublic.azureedge.net/main/whisper/models/e5b1a55b89c1367dacf97e3e19bfd829a01529dbfdeefa8caeb59b3f1b81dadb/large-v3.pt",
 }
 
 # base85-encoded (n_layers, n_heads) boolean arrays indicating the cross-attention heads that are
@@ -41,7 +42,8 @@ _ALIGNMENT_HEADS = {
     "medium": b"ABzY8B0Jh+0{>%R7}kK1fFL7w6%<-Pf*t^=N)Qr&0RR9",
     "large-v1": b"ABzY8r9j$a0{>%R7#4sLmoOs{s)o3~84-RPdcFk!JR<kSfC2yj",
     "large-v2": b"ABzY8zd+h!0{>%R7=D0pU<_bnWW*tkYAhobTNnu$jnkEkXqp)j;w1Tzk)UH3X%SZd&fFZ2fC2yj",
-    "large": b"ABzY8zd+h!0{>%R7=D0pU<_bnWW*tkYAhobTNnu$jnkEkXqp)j;w1Tzk)UH3X%SZd&fFZ2fC2yj",
+    "large-v3": b"ABzY8gWO1E0{>%R7(9S+Kn!D~%ngiGaR?*L!iJG9p-nab0JQ=-{D1-g00",
+    "large": b"ABzY8gWO1E0{>%R7(9S+Kn!D~%ngiGaR?*L!iJG9p-nab0JQ=-{D1-g00",
 }
 
 
@@ -153,33 +155,9 @@ def load_model(
         model = Whisper(dims, args)
         model.load_state_dict(checkpoint["model_state_dict"])
     else:
-        if name == "base":
-            dims = ModelDimensions(
-                n_mels=80,
-                n_audio_ctx=1500,
-                n_audio_state=512,
-                n_audio_head=8,
-                n_audio_layer=6,
-                n_vocab=51865,
-                n_text_ctx=448,
-                n_text_state=512,
-                n_text_head=8,
-                n_text_layer=6
-            )
-        elif name == "large" or name == "large-v2":
-            dims = ModelDimensions(
-               n_mels=80,
-               n_audio_ctx=1500,
-               n_audio_state=1280,
-               n_audio_head=20,
-               n_audio_layer=32,
-               n_vocab=51865,
-               n_text_ctx=448,
-               n_text_state=1280,
-               n_text_head=20,
-               n_text_layer=32
-            )
-        elif name == "tiny":
+        if name == "large":
+            name = "large-v3"
+        if name == "tiny":
             dims = ModelDimensions(
                 n_mels=80,
                 n_audio_ctx=1500,
@@ -192,18 +170,18 @@ def load_model(
                 n_text_head=6,
                 n_text_layer=4
             )
-        elif name == "medium":
+        elif name == "base":
             dims = ModelDimensions(
-               n_mels=80,
-               n_audio_ctx=1500,
-               n_audio_state=1024,
-               n_audio_head=16,
-               n_audio_layer=24,
-               n_vocab=51865,
-               n_text_ctx=448,
-               n_text_state=1024,
-               n_text_head=16,
-               n_text_layer=24
+                n_mels=80,
+                n_audio_ctx=1500,
+                n_audio_state=512,
+                n_audio_head=8,
+                n_audio_layer=6,
+                n_vocab=51865,
+                n_text_ctx=448,
+                n_text_state=512,
+                n_text_head=8,
+                n_text_layer=6
             )
         elif name == "small":
             dims = ModelDimensions(
@@ -218,8 +196,47 @@ def load_model(
                n_text_head=12,
                n_text_layer=12
             )
+        elif name == "medium":
+            dims = ModelDimensions(
+               n_mels=80,
+               n_audio_ctx=1500,
+               n_audio_state=1024,
+               n_audio_head=16,
+               n_audio_layer=24,
+               n_vocab=51865,
+               n_text_ctx=448,
+               n_text_state=1024,
+               n_text_head=16,
+               n_text_layer=24
+            )
+        elif name == "large-v2":
+            dims = ModelDimensions(
+               n_mels=80,
+               n_audio_ctx=1500,
+               n_audio_state=1280,
+               n_audio_head=20,
+               n_audio_layer=32,
+               n_vocab=51865,
+               n_text_ctx=448,
+               n_text_state=1280,
+               n_text_head=20,
+               n_text_layer=32
+            )
+        elif name == "large-v3":
+            dims = ModelDimensions(
+               n_mels=128,
+               n_audio_ctx=1500,
+               n_audio_state=1280,
+               n_audio_head=20,
+               n_audio_layer=32,
+               n_vocab=51866,
+               n_text_ctx=448,
+               n_text_state=1280,
+               n_text_head=20,
+               n_text_layer=32
+            )
         else:
-            raise NotImplementedError("Only \"tiny, base, small, medium, large\" model is supported for inference")
+            raise NotImplementedError(f"Only \"tiny, base, small, medium, large, large-v2, large-v3\" model is supported for inference, {name} is not supported")
         
         model = Whisper(dims, args)
     

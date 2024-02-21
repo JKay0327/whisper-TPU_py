@@ -32,7 +32,7 @@ def export_gather():
             n_text_head=8,
             n_text_layer=6
         )
-    elif name == "large" or name == "large-v2":
+    elif name == "large-v2":
         dims = ModelDimensions(
             n_mels=80,
             n_audio_ctx=1500,

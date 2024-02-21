@@ -130,7 +130,7 @@ def transcribe(
 
     # Pad 30-seconds of silence to the input audio, for slicing
     # import pdb; pdb.set_trace()
-    mel = log_mel_spectrogram(audio, padding=N_SAMPLES) # a torch only part beacause of torch.hann_window, torch.stft etc.
+    mel = log_mel_spectrogram(audio, model.dims.n_mels, padding=N_SAMPLES) # a torch only part beacause of torch.hann_window, torch.stft etc.
     content_frames = mel.shape[-1] - N_FRAMES
 
     if decode_options.get("language", None) is None:
@@ -152,7 +152,12 @@ def transcribe(
 
     language: str = decode_options["language"]
     task: str = decode_options.get("task", "transcribe")
-    tokenizer = get_tokenizer(model.is_multilingual, language=language, task=task)
+    tokenizer = get_tokenizer(
+        model.is_multilingual,
+        num_languages=model.num_languages,
+        language=language,
+        task=task,
+    )
 
     if word_timestamps and task == "translate":
         warnings.warn("Word-level timestamps on translations may not be reliable.")
@@ -437,25 +442,19 @@ def cli():
     parser.add_argument("--padding_size", type=optional_int, default=448, help="max pre-allocation size for the key-value cache")
     parser.add_argument("--inference", action="store_true",help="whether to perform inference or not")
     parser.add_argument("--export_onnx", action="store_true", help="whether to export onnx model or not")
+    parser.add_argument("--export_pt", action="store_true", help="whether to export pt model or not")
     parser.add_argument("--use_kvcache", action="store_true", help="whether to use key-value cache or not")
     parser.add_argument("--split", action="store_true", help="whether to split the decoder model")
     parser.add_argument("--quant", action="store_true", help="whether to quant the inputs and outputs of model")
-    parser.add_argument("--log", action="store_true", help="whether to log the inputs and outputs of model")
+    parser.add_argument("--log", type=optional_int, default=0, help="whether to log the inputs and outputs of model")
     parser.add_argument("--runtime", type=str, default="untool", help="whether to use untool or SGInfer")
     
     # fmt: on
 
     args = parser.parse_args().__dict__
-    # import pdb; pdb.set_trace()
-    # model_name: str = args.pop("model")
-    # model_dir: str = args.pop("model_dir")
-    # device: str = args.pop("device")
-    # inference: bool = args.pop("inference")
-    # export_onnx: bool = args.pop("export_onnx")
     args["model_name"] = args.pop("model")
     output_dir: str = args.pop("output_dir")
     output_format: str = args.pop("output_format")
-    device: str = "cpu"
     os.makedirs(output_dir, exist_ok=True)
 
     assert not (args["inference"] and args["export_onnx"]), "inference and export cannot be True at the same time"
@@ -467,6 +466,12 @@ def cli():
                 f"{model_name} is an English-only model but receipted '{args['language']}'; using English instead."
             )
         args["language"] = "en"
+    if "large" in model_name and args["export_onnx"]:
+        warnings.warn(
+            f"{model_name} only support export pt model; exporting pt model instead."
+        )
+        args["export_onnx"] = False
+        args["export_pt"] = True
 
     temperature = args.pop("temperature")
     if (increment := args.pop("temperature_increment_on_fallback")) is not None:
@@ -480,7 +485,7 @@ def cli():
     from . import load_model
 
     model = load_model(args) 
-    pop_list = ["model_name", "model_dir", "bmodel_dir", "inference", "export_onnx", "use_kvcache", "split", "quant", "log", "runtime"]
+    pop_list = ["model_name", "model_dir", "bmodel_dir", "inference", "export_onnx", "export_pt", "use_kvcache", "split", "quant", "log", "runtime"]
     for arg in pop_list:
         args.pop(arg)
 

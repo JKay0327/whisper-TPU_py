@@ -40,8 +40,10 @@ class Linear(nn.Linear):
     def forward(self, x: Tensor) -> Tensor:
         return F.linear(
             x,
-            self.weight.to(x.dtype),
-            None if self.bias is None else self.bias.to(x.dtype),
+            # self.weight.to(x.dtype),
+            # None if self.bias is None else self.bias.to(x.dtype),
+            self.weight,
+            None if self.bias is None else self.bias,
         )
 
 
@@ -49,8 +51,11 @@ class Conv1d(nn.Conv1d):
     def _conv_forward(
         self, x: Tensor, weight: Tensor, bias: Optional[Tensor]
     ) -> Tensor:
+        # return super()._conv_forward(
+        #     x, weight.to(x.dtype), None if bias is None else bias.to(x.dtype)
+        # )
         return super()._conv_forward(
-            x, weight.to(x.dtype), None if bias is None else bias.to(x.dtype)
+            x, weight, None if bias is None else bias
         )
 
 
@@ -62,6 +67,54 @@ def sinusoids(length, channels, max_timescale=10000):
     scaled_time = torch.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
     return torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1)
 
+
+# class MultiHeadAttention(nn.Module):
+#     def __init__(self, n_state: int, n_head: int):
+#         super().__init__()
+#         self.n_head = n_head
+#         self.query = Linear(n_state, n_state)
+#         self.key = Linear(n_state, n_state, bias=False)
+#         self.value = Linear(n_state, n_state)
+#         self.out = Linear(n_state, n_state)
+
+#     def forward(
+#         self,
+#         x: Tensor,
+#         xa: Optional[Tensor] = None,
+#         mask: Optional[Tensor] = None,
+#         kv_cache: Optional[dict] = None,
+#     ):
+#         q = self.query(x)
+
+#         if kv_cache is None or xa is None or self.key not in kv_cache:
+#             # hooks, if installed (i.e. kv_cache is not None), will prepend the cached kv tensors;
+#             # otherwise, perform key/value projections for self- or cross-attention as usual.
+#             k = self.key(x if xa is None else xa)
+#             v = self.value(x if xa is None else xa)
+#         else:
+#             # for cross-attention, calculate keys and values once and reuse in subsequent calls.
+#             k = kv_cache[self.key]
+#             v = kv_cache[self.value]
+
+#         wv, qk = self.qkv_attention(q, k, v, mask)
+#         return self.out(wv), qk
+
+#     def qkv_attention(
+#         self, q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None
+#     ):
+#         _, n_ctx, n_state = q.shape
+#         scale = (n_state // self.n_head) ** -0.25
+#         q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
+#         k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
+#         v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
+
+#         qk = q @ k
+#         if mask is not None:
+#             qk = qk + mask[:n_ctx, :n_ctx]
+#         qk = qk.float()
+
+#         w = F.softmax(qk, dim=-1).to(q.dtype)
+#         return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2), qk.detach()
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, n_state: int, n_head: int):
@@ -91,8 +144,8 @@ class MultiHeadAttention(nn.Module):
             k = kv_cache[self.key]
             v = kv_cache[self.value]
 
-        wv, qk = self.qkv_attention(q, k, v, mask)
-        return self.out(wv), qk
+        wv = self.qkv_attention(q, k, v, mask)
+        return self.out(wv)
 
     def qkv_attention(
         self, q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None
@@ -109,7 +162,7 @@ class MultiHeadAttention(nn.Module):
         qk = qk.float()
 
         w = F.softmax(qk, dim=-1).to(q.dtype)
-        return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2), qk.detach()
+        return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
 
 
 class ResidualAttentionBlock(nn.Module):
@@ -137,9 +190,11 @@ class ResidualAttentionBlock(nn.Module):
         mask: Optional[Tensor] = None,
         kv_cache: Optional[dict] = None,
     ):
-        x = x + self.attn(self.attn_ln(x), mask=mask)[0]
+        # x = x + self.attn(self.attn_ln(x), mask=mask)[0]
+        x = x + self.attn(self.attn_ln(x), mask=mask)
         if self.cross_attn:
-            x = x + self.cross_attn(self.cross_attn_ln(x), xa)[0]
+            # x = x + self.cross_attn(self.cross_attn_ln(x), xa)[0]
+            x = x + self.cross_attn(self.cross_attn_ln(x), xa)
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
@@ -167,7 +222,7 @@ class AudioEncoder(nn.Module):
         x = F.gelu(self.conv2(x))
         x = x.permute(0, 2, 1)
 
-        assert x.shape[ 1:] == self.positional_embedding.shape, "incorrect audio shape"
+        # assert x.shape[ 1:] == self.positional_embedding.shape, "incorrect audio shape"
         x = (x + self.positional_embedding).to(x.dtype)
 
         for block in self.blocks:
@@ -242,7 +297,13 @@ class Whisper(nn.Module):
         self.decoder_post_infer = None
         self.decoder_loop_infer = None
         self.inference = args["inference"]
-        self.export_onnx = args["export_onnx"]
+        self.export_mode = None
+        if args["export_onnx"]:
+            self.export_mode = "onnx"
+        elif args["export_pt"]:
+            self.export_mode = "pt"
+        # self.export_onnx = args["export_onnx"]
+        # self.export_pt = args["export_pt"]
         self.fp16 = args["fp16"]
         self.bmodel_dir = args["bmodel_dir"]
         self.beam_size = args["beam_size"]
@@ -269,7 +330,8 @@ class Whisper(nn.Module):
                 self.dims.n_text_layer,
             )
 
-        # use the last half layers for alignment by default; see `set_alignment_heads()` below
+        # use the last half among the decoder layers for time alignment by default;
+        # to use a specific set of heads, see `set_alignment_heads()` below.
         all_heads = torch.zeros(
             self.dims.n_text_layer, self.dims.n_text_head, dtype=torch.bool
         )
@@ -511,8 +573,6 @@ class Whisper(nn.Module):
 
             logits = torch.from_numpy(logits)
 
-
-
             # _ = self.logits_decoder_infer.put(tokens, audio_features)
             # _, result, _ = self.logits_decoder_infer.get()
             # logits = torch.from_numpy(result[0])
@@ -521,24 +581,30 @@ class Whisper(nn.Module):
             # import pdb; pdb.set_trace()
             # logits = torch.from_numpy(result[0].astype(np.float32))
         else:
-            # import pdb; pdb.set_trace()
-            if self.export_onnx:
-                onnx_input_names = ["tokens", "audio_features"]
-                onnx_output_names = ["logits",]
-                onnx_input_dict = {"tokens":tokens, "audio_features":audio_features}
+            import pdb; pdb.set_trace()
+            if self.export_mode:
                 model_name= f"logits_decoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad"
+                input = (tokens, audio_features,)
+                input_names = ["tokens", "audio_features"]
+                output_names = ["logits",]
+                input_dict = {"tokens":tokens, "audio_features":audio_features}
+                np.savez(model_name + "_inputs.npz", **input_dict)
 
-                np.savez(model_name + "_inputs.npz", **onnx_input_dict)
-                torch.onnx.export(
-                    self.decoder,
-                    (tokens, audio_features,),  # Pass the actual input data
-                    model_name + ".onnx",
-                    verbose=True,
-                    input_names=onnx_input_names,  # Provide input names
-                    output_names=onnx_output_names,  # Provide output names
-                    opset_version=15,  # ONNX opset version to use
-                )
+                if self.export_mode == "onnx":
+                    torch.onnx.export(
+                        self.decoder,
+                        input,  # Pass the actual input data
+                        model_name + ".onnx",
+                        verbose=True,
+                        input_names=input_names,  # Provide input names
+                        output_names=output_names,  # Provide output names
+                        opset_version=15,  # ONNX opset version to use
+                    )
+                elif self.export_mode == "pt":
+                    torch.jit.trace(self.decoder, input).save(model_name + ".pt")
+            import pdb; pdb.set_trace()
             logits = self.decoder(tokens, audio_features)
+            exit()
         self.call_logits_decoder += 1
         return logits
         # return self.decoder(tokens, audio_features)
@@ -555,7 +621,12 @@ class Whisper(nn.Module):
 
     @property
     def is_multilingual(self):
-        return self.dims.n_vocab == 51865
+        # return self.dims.n_vocab == 51865
+        return self.dims.n_vocab >= 51865
+
+    @property
+    def num_languages(self):
+        return self.dims.n_vocab - 51765 - int(self.is_multilingual)
 
     def install_kv_cache_hooks(self, cache: Optional[dict] = None):
         """
