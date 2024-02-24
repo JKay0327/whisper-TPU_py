@@ -7,11 +7,14 @@ pip install requirements.txt
 ```
 It also requires the command-line tool `ffmpeg` to be installed on your system, which is available from most package managers:
 ```bash
+# sophon ffmpeg
+export PATH=$PATH:/opt/sophon/sophon-ffmpeg-latest/bin
+
 # if you use a conda environment
 conda install ffmpeg
- 
+
 # on Ubuntu or Debian
-sudo apt update && sudo apt install ffmpeg 
+sudo apt update && sudo apt install ffmpeg
 ```
 You can install bmwhisper as follow:
 ```bash
@@ -48,8 +51,8 @@ bmwhisper demo.wav --chip_mode soc
 ## Http api usage
 
 ### Start api service
-`python api.py` 
-    
+`python api.py`
+
     This service depends on the whisper command. Please install whisper successfully before using this service.
 
 ### upload task

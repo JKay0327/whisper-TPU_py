@@ -13,7 +13,23 @@ from torch.distributions import Categorical
 from .audio import CHUNK_LENGTH
 from .tokenizer import Tokenizer, get_tokenizer
 from .utils import compression_ratio
-from .untool import Tool, make_np2c, data_type, data_type_map
+
+def fp16_cast(arr:np.ndarray):
+  if arr.dtype == np.float16:
+    return arr.view(np.uint16)
+  else:
+    return arr
+
+def uint16_to_fp16(arr: np.ndarray):
+    if arr.dtype == np.uint16:
+        return arr.view(np.float16)
+    else:
+        return arr
+
+def compare_float16_error(arr1, arr2, threshold = 0.005):
+    diff = np.abs(arr1 - arr2)
+    if np.any(diff > threshold):
+        raise ValueError("Error threshold exceeded in float16 comparison")
 
 if TYPE_CHECKING:
     from .model import Whisper
@@ -52,25 +68,20 @@ def detect_language(
     # skip encoder forward pass if already-encoded audio features were given
     if mel.shape[-2:] != (model.dims.n_audio_ctx, model.dims.n_audio_state):
         # transform type from encoder inputs
-        encoder_info = model.tool.model_info(model.encoder_handle)
-        mel_input_dtype = data_type_map[encoder_info['input_dtypes'][0]]
-        mel = mel.numpy().astype(mel_input_dtype)
+        # type
+        mel = mel.numpy().astype(np.float16)
         mel = mel if mel.flags.c_contiguous else np.ascontiguousarray(mel)
 
-        # combine numpy addr with C addr & copy data from host to device for input data
-        model.tool.copy_data_from_numpy(model.tool.get_input_tensor(model.runtime1, 0), make_np2c(mel), data_type[mel_input_dtype])
-        model.tool.force_host_to_device(model.tool.get_input_tensor(model.runtime1, 0), model.handle)
+        encoder_engine_graph_name = model.encoder_engine.get_graph_names()[0]
+        encoder_input_tensors_map = model.encoder_engine.create_input_tensors_map(encoder_engine_graph_name)
+        encoder_output_tensors_map = model.encoder_engine.create_output_tensors_map(encoder_engine_graph_name)
 
-        # combine numpy addr with C addr for output data need cpu infernece
-        mel_out = np.empty(encoder_info[0]['output_shapes'][0], dtype=data_type_map[encoder_info['output_dtypes'][0]])
-        model.tool.copy_data_from_numpy(model.tool.get_output_tensor(model.runtime1, 0), make_np2c(mel_out), encoder_info['output_dtypes'][0])
+        uint16_mel = fp16_cast(mel)
+        encoder_input_tensors_map[model.encoder_engine.get_input_names(encoder_engine_graph_name)[0]].update_data(uint16_mel);
 
-        # inference encoder on tpu
-        model.tool.inference(model.runtime1)
-
-        # copy data from device to host for output data
-        model.tool.copy_output_data_to_host(model.runtime1)
-        mel_out = torch.from_numpy(mel_out)
+        model.encoder_engine.process(encoder_engine_graph_name,encoder_input_tensors_map,encoder_output_tensors_map)
+        mel_out_tensor = list(encoder_output_tensors_map.values())[0]
+        mel_out = torch.from_numpy(mel_out_tensor.asnumpy())
 
         model.time += time.time() - start_time
         model.call_encoder += 1
@@ -159,11 +170,11 @@ class Inference:
         raise NotImplementedError
 
     def rearrange_kv_cache(
-            self, 
-            source_indices, 
-            self_attention_kcache: Tensor, 
-            self_attention_vcache: Tensor, 
-            cross_attention_kcache: Tensor, 
+            self,
+            source_indices,
+            self_attention_kcache: Tensor,
+            self_attention_vcache: Tensor,
+            cross_attention_kcache: Tensor,
             cross_attention_vcache: Tensor
         ) -> None:
         """Update the key-value cache according to the updated beams"""
@@ -179,21 +190,20 @@ class PyTorchInference(Inference):
         self.model: "Whisper" = model
 
     def rearrange_kv_cache(
-            self, 
-            source_indices, 
-            self_attention_kcache: Tuple[Tensor] = None, 
-            self_attention_vcache: Tuple[Tensor] = None, 
+            self,
+            source_indices,
+            self_attention_kcache: Tuple[Tensor] = None,
+            self_attention_vcache: Tuple[Tensor] = None,
         ):
         if source_indices != list(range(len(source_indices))):
             start_time = time.time()
             indices = np.array(source_indices, dtype=np.int32)
             indices = indices if indices.flags.contiguous else indices.copy()
-            # combine numpy addr with C addr & copy data from host to device for input data
-            self.model.tool.copy_data_from_numpy(self.model.tool.get_input_tensor(self.model.kvcache_rearrange_runtime[0], 1), make_np2c(indices), 6)
-            self.model.tool.force_host_to_device(self.model.tool.get_input_tensor(self.model.kvcache_rearrange_runtime[0], 1), self.model.handle)
+            self.model.kvcache_rearrange_input_dict[self.model.kvcache_rearrange_engine_list[0]][self.model.kvcache_rearrange_engine_list[0].get_input_names(self.model.kvcache_rearrange_engine_list[0].get_graph_names()[0])[1]].update_data(indices)
+
             for i in range(2 * self.model.dims.n_text_layer):
-                # inference decoder_main on tpu
-                self.model.tool.inference(self.model.kvcache_rearrange_runtime[i])
+                self.model.kvcache_rearrange_engine_list[i].process(self.model.kvcache_rearrange_engine_list[i].get_graph_names()[0], self.model.kvcache_rearrange_input_dict[self.model.kvcache_rearrange_engine_list[i]], self.model.kvcache_rearrange_output_dict[self.model.kvcache_rearrange_engine_list[i]])
+
             self.model.time += time.time() - start_time
             self.model.call_kvcache_rearrange += 2 * self.model.dims.n_text_layer
             return
@@ -240,10 +250,10 @@ class TokenDecoder:
         """Initialize any stateful variables for decoding a new sequence"""
 
     def update(
-        self, 
-        tokens: Tensor, 
-        logits: Tensor, 
-        sum_logprobs: Tensor, 
+        self,
+        tokens: Tensor,
+        logits: Tensor,
+        sum_logprobs: Tensor,
     ) -> Tuple[Tensor, bool]:
         """Specify how to select the next token, based on the current trace and logits
 
@@ -300,12 +310,12 @@ class GreedyDecoder(TokenDecoder):
         self.eot = eot
 
     def update(
-        self, 
-        tokens: Tensor, 
-        logits: Tensor, 
-        sum_logprobs: Tensor, 
-        self_attention_kcache: Tensor = None, 
-        self_attention_vcache: Tensor = None, 
+        self,
+        tokens: Tensor,
+        logits: Tensor,
+        sum_logprobs: Tensor,
+        self_attention_kcache: Tensor = None,
+        self_attention_vcache: Tensor = None,
     ) -> Tuple[Tensor, bool]:
         if self.temperature == 0:
             next_tokens = logits.argmax(dim=-1)
@@ -351,12 +361,12 @@ class BeamSearchDecoder(TokenDecoder):
         self.finished_sequences = None
 
     def update(
-        self, 
-        tokens: Tensor, 
-        logits: Tensor, 
-        sum_logprobs: Tensor, 
-        self_attention_kcache: Tensor = None, 
-        self_attention_vcache: Tensor = None, 
+        self,
+        tokens: Tensor,
+        logits: Tensor,
+        sum_logprobs: Tensor,
+        self_attention_kcache: Tensor = None,
+        self_attention_vcache: Tensor = None,
     ) -> Tuple[Tensor, bool]:
         if tokens.shape[0] % self.beam_size != 0:
             raise ValueError(f"{tokens.shape}[0] % {self.beam_size} != 0")
@@ -401,9 +411,9 @@ class BeamSearchDecoder(TokenDecoder):
 
         if self_attention_kcache:
             self.inference.rearrange_kv_cache(
-                source_indices, 
-                self_attention_kcache, 
-                self_attention_vcache, 
+                source_indices,
+                self_attention_kcache,
+                self_attention_vcache,
             )
         else:
             self.inference.rearrange_kv_cache(source_indices)
@@ -557,7 +567,7 @@ class DecodingTask:
 
     def __init__(self, model: "Whisper", options: DecodingOptions):
         self.model = model
-        
+
         language = options.language or "en"
         tokenizer = get_tokenizer(
             model.is_multilingual, language=language, task=options.task
@@ -696,28 +706,22 @@ class DecodingTask:
             audio_features = mel
         else:
             start_time = time.time()
-            # type transform for decoder_main inputs
-            encoder_info = self.model.tool.model_info(self.model.encoder_handle)
-            mel_input_dtype = data_type_map[encoder_info['input_dtypes'][0]]
-            mel = mel.numpy().astype(mel_input_dtype)
 
+            mel = mel.numpy().astype(np.float16)
             mel = mel if mel.flags.c_contiguous else np.ascontiguousarray(mel)
 
-            # combine numpy addr with C addr & copy data from host to device for input data
-            self.model.tool.copy_data_from_numpy(self.model.tool.get_input_tensor(self.model.runtime1, 0), make_np2c(mel), data_type[mel_input_dtype])
-            self.model.tool.force_host_to_device(self.model.tool.get_input_tensor(self.model.runtime1, 0), self.model.handle)
+            # sail
+            encoder_engine_graph_name = self.model.encoder_engine.get_graph_names()[0]
+            encoder_input_tensors_map = self.model.encoder_engine.create_input_tensors_map(encoder_engine_graph_name)
+            encoder_output_tensors_map = self.model.encoder_engine.create_output_tensors_map(encoder_engine_graph_name)
 
-            # combine numpy addr with C addr for output data need cpu infernece
-            mel_out = np.empty(encoder_info[0]['output_shapes'][0], dtype=data_type_map[encoder_info['output_dtypes'][0]])
-            self.model.tool.copy_data_from_numpy(self.model.tool.get_output_tensor(self.model.runtime1, 0), make_np2c(mel_out), encoder_info['output_dtypes'][0])
+            uint16_mel = fp16_cast(mel)
+            encoder_input_tensors_map[self.model.encoder_engine.get_input_names(encoder_engine_graph_name)[0]].update_data(uint16_mel);
 
-            # inference encoder on tpu
-            self.model.tool.inference(self.model.runtime1)
+            self.model.encoder_engine.process(encoder_engine_graph_name,encoder_input_tensors_map,encoder_output_tensors_map)
+            mel_out_tensor = list(encoder_output_tensors_map.values())[0]
 
-            # copy data from device to host for output data
-            self.model.tool.copy_output_data_to_host(self.model.runtime1)
-            audio_features = torch.from_numpy(mel_out)
-
+            audio_features = torch.from_numpy(mel_out_tensor.asnumpy())
             self.model.call_encoder +=1
             self.model.time += time.time() - start_time
             # print(f"_get_audio_features encoder time: {time.time() - start_time}")
@@ -738,7 +742,7 @@ class DecodingTask:
 
         return languages, lang_probs
 
-    def _main_loop_untool(self, audio_features: Tensor, tokens: Tensor):
+    def _main_loop_sail(self, audio_features: Tensor, tokens: Tensor):
         # print("{:=^100}".format(f" start main_loop {self.model.main_loop_cnt} "))
         self.model.main_loop_cnt += 1
         n_batch = tokens.shape[0]
@@ -746,12 +750,12 @@ class DecodingTask:
         no_speech_probs = [np.nan] * n_batch
         initial_tokens_length = len(self.initial_tokens)
         padding_num = self.padding_size
-    
+
         attention_mask_firstly = torch.empty(padding_num, padding_num).fill_(-10000).triu_(1)
         attention_mask_with_kvcache_max = torch.empty(448, 448).fill_(-10000).triu_(1)
         attention_mask_with_kvcache = attention_mask_with_kvcache_max[-padding_num:, -padding_num:]
         loop_start_time = time.time()
-        tool = self.model.tool
+
 
         try:
             for i in range(self.sample_len):
@@ -772,103 +776,87 @@ class DecodingTask:
                 if i == 0:
                     start_time = time.time()
                     # type transform for decoder_main inputs
-                    decoder_main_info = tool.model_info(self.model.decoder_main_handle)
                     tokens_input = tokens_input.numpy().astype(np.int32)
-                    audio_features_dtype = data_type_map[decoder_main_info['input_dtypes'][1]]
-                    audio_features = audio_features.numpy().astype(audio_features_dtype)
-                    positional_embedding_input_dtype = data_type_map[decoder_main_info['input_dtypes'][2]]
-                    positional_embedding_input = positional_embedding_input.numpy().astype(positional_embedding_input_dtype)
-                    mask_dtype = data_type_map[decoder_main_info['input_dtypes'][3]]
-                    mask = mask.numpy().astype(mask_dtype)
+                    audio_features = audio_features.numpy().astype(np.float16)
+                    positional_embedding_input = positional_embedding_input.numpy().astype(np.float16)
+                    mask = mask.numpy().astype(np.float16)
 
                     tokens_input = tokens_input if tokens_input.flags.c_contiguous else np.ascontiguousarray(tokens_input)
                     audio_features = audio_features if audio_features.flags.c_contiguous else np.ascontiguousarray(audio_features)
                     positional_embedding_input = positional_embedding_input if positional_embedding_input.flags.c_contiguous else np.ascontiguousarray(positional_embedding_input)
                     mask = mask if mask.flags.c_contiguous else np.ascontiguousarray(mask)
 
-                    # combine numpy addr with C addr & copy data from host to device for input data
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime3, 0), make_np2c(tokens_input), data_type[np.int32])
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime3, 1), make_np2c(audio_features), data_type[audio_features_dtype])
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime3, 2), make_np2c(positional_embedding_input), data_type[positional_embedding_input_dtype])
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime3, 3), make_np2c(mask), data_type[mask_dtype])
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime3, 0), self.model.handle)
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime3, 1), self.model.handle)
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime3, 2), self.model.handle)
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime3, 3), self.model.handle)
+                    self.model.decoder_main_input_tensors_map[self.model.decoder_main_engine.get_input_names(self.model.decoder_main_graph_name)[0]].update_data(tokens_input)
 
-                    # combine numpy addr with C addr for output data need cpu infernece
-                    x = np.empty(decoder_main_info[0]['output_shapes'][0], dtype=data_type_map[decoder_main_info['output_dtypes'][0]])
-                    tool.copy_data_from_numpy(tool.get_output_tensor(self.model.runtime3, 0), make_np2c(x), decoder_main_info['output_dtypes'][0])
+                    uint16_audio_features = fp16_cast(audio_features)
+                    self.model.decoder_main_input_tensors_map[self.model.decoder_main_engine.get_input_names(self.model.decoder_main_graph_name)[1]].update_data(uint16_audio_features)
 
-                    # inference decoder_main on tpu
-                    tool.inference(self.model.runtime3)
+                    uint16_positional_embedding_input = fp16_cast(positional_embedding_input)
+                    self.model.decoder_main_input_tensors_map[self.model.decoder_main_engine.get_input_names(self.model.decoder_main_graph_name)[2]].update_data(uint16_positional_embedding_input)
 
-                    # copy data from device to host for output data
-                    tool.device_to_host(tool.get_output_tensor(self.model.runtime3, 0), self.model.handle)
+                    uint16_mask = fp16_cast(mask)
+                    self.model.decoder_main_input_tensors_map[self.model.decoder_main_engine.get_input_names(self.model.decoder_main_graph_name)[3]].update_data(uint16_mask)
 
+                    self.model.decoder_main_engine.process(self.model.decoder_main_graph_name, self.model.decoder_main_input_tensors_map,self.model.decoder_main_output_tensors_map)
+
+                    x_tensor = self.model.decoder_main_output_tensors_map[self.model.decoder_main_engine.get_output_names(self.model.decoder_main_graph_name)[0]]
+                    # compare_float16_error(uint16_to_fp16(x_tensor.asnumpy()), x)
+
+                    x = uint16_to_fp16(x_tensor.asnumpy())
                     # get input data for decoder_post
                     # this process is dynamic
                     x_sot = x[:, padding_num - initial_tokens_length + self.sot_index:padding_num - initial_tokens_length + self.sot_index + 1].copy()
                     x_last = x[:, -1:].copy()
 
-                    # combine numpy addr with C addr & copy data from host to device for input data
-                    decoder_post_info = tool.model_info(self.model.decoder_post_handle)
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime4, 0), make_np2c(x_sot), data_type[x_sot.dtype])
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime4, 1), make_np2c(x_last), data_type[x_last.dtype])
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime4, 0), self.model.handle)
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime4, 1), self.model.handle)
-                    
-                    # combine numpy addr with C addr for output data need cpu infernece
-                    logits = np.empty(decoder_post_info[0]['output_shapes'][0], dtype=data_type_map[decoder_post_info['output_dtypes'][0]])
-                    no_speech_probs = np.empty(decoder_post_info[0]['output_shapes'][1], dtype=data_type_map[decoder_post_info['output_dtypes'][1]])
-                    tool.copy_data_from_numpy(tool.get_output_tensor(self.model.runtime4, 0), make_np2c(logits), decoder_post_info['output_dtypes'][0])
-                    tool.copy_data_from_numpy(tool.get_output_tensor(self.model.runtime4, 1), make_np2c(no_speech_probs), decoder_post_info['output_dtypes'][1])
 
-                    # inference decoder_post on tpu
-                    tool.inference(self.model.runtime4)
+                    decoder_post_graph_name = self.model.decoder_post_engine.get_graph_names()[0]
+                    decoder_post_input_tensors_map = self.model.decoder_post_engine.create_input_tensors_map(decoder_post_graph_name)
+                    decoder_post_output_tensors_map = self.model.decoder_post_engine.create_output_tensors_map(decoder_post_graph_name)
 
-                    # copy data from device to host for output data
-                    tool.copy_output_data_to_host(self.model.runtime4)
+                    uint16_x_sot = fp16_cast(x_sot)
+                    decoder_post_input_tensors_map[self.model.decoder_post_engine.get_input_names(decoder_post_graph_name)[0]].update_data(uint16_x_sot);
+                    uint16_x_last = fp16_cast(x_last)
+                    decoder_post_input_tensors_map[self.model.decoder_post_engine.get_input_names(decoder_post_graph_name)[1]].update_data(uint16_x_last);
 
-                    logits = torch.from_numpy(logits)
-                    no_speech_probs = no_speech_probs.tolist()
-                    
+                    self.model.decoder_post_engine.process(decoder_post_graph_name,decoder_post_input_tensors_map,decoder_post_output_tensors_map)
+                    logits_tensor = decoder_post_output_tensors_map[self.model.decoder_post_engine.get_output_names(decoder_post_graph_name)[0]]
+                    no_speech_probs_tensor = decoder_post_output_tensors_map[self.model.decoder_post_engine.get_output_names(decoder_post_graph_name)[1]]
+
+                    logits = torch.from_numpy(uint16_to_fp16(logits_tensor.asnumpy()))
+                    no_speech_probs = uint16_to_fp16(no_speech_probs_tensor.asnumpy()).tolist()
+
                     self.model.call_decoder_firstly += 1
                     self.model.time += time.time() - start_time
 
                 else:
                     start_time = time.time()
                     # type transform for decoder_loop inputs
-                    decoder_loop_info = tool.model_info(self.model.decoder_loop_handle)
-
                     tokens_input = tokens_input.numpy().astype(np.int32)
-                    positional_embedding_input_dtype = data_type_map[decoder_loop_info['input_dtypes'][1]]
-                    positional_embedding_input = positional_embedding_input.numpy().astype(positional_embedding_input_dtype)
-                    mask_dtype = data_type_map[decoder_loop_info['input_dtypes'][2]]
-                    mask = mask.numpy().astype(mask_dtype)
+                    positional_embedding_input = positional_embedding_input.numpy().astype(np.float16)
+                    mask = mask.numpy().astype(np.float16)
 
                     tokens_input = tokens_input if tokens_input.flags.contiguous else np.ascontiguousarray(tokens_input)
                     positional_embedding_input = positional_embedding_input if positional_embedding_input.flags.contiguous else np.ascontiguousarray(positional_embedding_input)
                     mask = mask if mask.flags.contiguous else np.ascontiguousarray(mask)
 
-                    # combine numpy addr with C addr & copy data from host to device for input data
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime5, 0), make_np2c(tokens_input), data_type[np.int32])
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime5, 1), make_np2c(positional_embedding_input), data_type[positional_embedding_input_dtype])
-                    tool.copy_data_from_numpy(tool.get_input_tensor(self.model.runtime5, 2), make_np2c(mask), data_type[mask_dtype])
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime5, 0), self.model.handle)
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime5, 1), self.model.handle)
-                    tool.force_host_to_device(tool.get_input_tensor(self.model.runtime5, 2), self.model.handle)
+                    # sail
+                    self.model.decoder_loop_input_tensors_map[self.model.decoder_loop_engine.get_input_names(self.model.decoder_loop_graph_name)[0]].update_data(tokens_input)
+                    self.model.decoder_loop_input_tensors_map[self.model.decoder_loop_engine.get_input_names(self.model.decoder_loop_graph_name)[0]].sync_s2d()
 
-                    # combine numpy addr with C addr for output data need cpu infernece in first loop
-                    if i == 1:
-                        tool.copy_data_from_numpy(tool.get_output_tensor(self.model.runtime5, 0), make_np2c(logits.numpy()), decoder_loop_info['output_dtypes'][0])
+                    uint16_positional_embedding_input = fp16_cast(positional_embedding_input)
+                    self.model.decoder_loop_input_tensors_map[self.model.decoder_loop_engine.get_input_names(self.model.decoder_loop_graph_name)[1]].update_data(uint16_positional_embedding_input)
+                    self.model.decoder_loop_input_tensors_map[self.model.decoder_loop_engine.get_input_names(self.model.decoder_loop_graph_name)[1]].sync_s2d()
 
-                    # tool.malloc_device_address(self.model.runtime5)
-                    # inference decoder_post on tpu
-                    tool.inference(self.model.runtime5)
+                    uint16_mask = fp16_cast(mask)
+                    self.model.decoder_loop_input_tensors_map[self.model.decoder_loop_engine.get_input_names(self.model.decoder_loop_graph_name)[2]].update_data(uint16_mask)
+                    self.model.decoder_loop_input_tensors_map[self.model.decoder_loop_engine.get_input_names(self.model.decoder_loop_graph_name)[2]].sync_s2d()
 
-                    # copy data from device to host for output data
-                    tool.device_to_host(tool.get_output_tensor(self.model.runtime5, 0), self.model.handle)
+                    self.model.decoder_loop_engine.process(self.model.decoder_loop_graph_name, self.model.decoder_loop_input_tensors_map, self.model.decoder_loop_output_tensors_map)
+
+
+                    logits_tensor = self.model.decoder_loop_output_tensors_map[self.model.decoder_loop_engine.get_output_names(self.model.decoder_loop_graph_name)[0]]
+
+                    logits = torch.from_numpy(uint16_to_fp16(logits_tensor.asnumpy()))
 
                     self.model.call_decoder_loop += 1
                     self.model.time += time.time() - start_time
@@ -878,9 +866,9 @@ class DecodingTask:
                     logit_filter.apply(logits, tokens)
 
                 # expand the tokens tensor with the selected next tokens
-                tokens, completed = self.decoder.update(tokens, 
-                                                        logits.float(), 
-                                                        sum_logprobs, 
+                tokens, completed = self.decoder.update(tokens,
+                                                        logits.float(),
+                                                        sum_logprobs,
                                                     )
 
                 if completed or tokens.shape[-1] > self.n_ctx:
@@ -916,7 +904,7 @@ class DecodingTask:
         tokens = tokens.repeat_interleave(self.n_group, dim=0).to(torch.int32)
 
         # call the main sampling loop
-        tokens, sum_logprobs, no_speech_probs = self._main_loop_untool(audio_features, tokens) # decoder forward pass
+        tokens, sum_logprobs, no_speech_probs = self._main_loop_sail(audio_features, tokens) # decoder forward pass
 
         # reshape the tensors to have (n_audio, n_group) as the first two dimensions
         audio_features = audio_features[:: self.n_group]
