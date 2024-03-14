@@ -111,7 +111,7 @@ def transcribe(
     dtype = torch.float16
 
     # Pad 30-seconds of silence to the input audio, for slicing
-    mel = log_mel_spectrogram(audio, padding=N_SAMPLES) # a torch only part beacause of torch.hann_window, torch.stft etc.
+    mel = log_mel_spectrogram(audio, model.dims.n_mels, padding=N_SAMPLES)
     content_frames = mel.shape[-1] - N_FRAMES
 
     if decode_options.get("language", None) is None:
@@ -132,8 +132,12 @@ def transcribe(
 
     language: str = decode_options["language"]
     task: str = decode_options.get("task", "transcribe")
-    tokenizer = get_tokenizer(model.is_multilingual, language=language, task=task)
-
+    tokenizer = get_tokenizer(
+        model.is_multilingual,
+        num_languages=model.num_languages,
+        language=language,
+        task=task,
+    )
     if word_timestamps and task == "translate":
         warnings.warn("Word-level timestamps on translations may not be reliable.")
 
@@ -142,7 +146,6 @@ def transcribe(
             [temperature] if isinstance(temperature, (int, float)) else temperature
         )
         decode_result = None
-        # import pdb; pdb.set_trace()
 
         for t in temperatures:
             kwargs = {**decode_options}
@@ -155,7 +158,6 @@ def transcribe(
                 kwargs.pop("best_of", None)
             # print('{:=^100s}'.format(f' decode_with_fallback temperatures {t} '))
             # print(f"kwargs: {kwargs}")
-
             options = DecodingOptions(**kwargs, temperature=t)
             decode_result = model.decode(segment, options)
 
@@ -213,7 +215,7 @@ def transcribe(
             "compression_ratio": result.compression_ratio,
             "no_speech_prob": result.no_speech_prob,
         }
-
+        
     # show the progress bar when verbose is False (if True, transcribed text will be printed)
     with tqdm.tqdm(
         total=content_frames, unit="frames", disable=verbose is not False

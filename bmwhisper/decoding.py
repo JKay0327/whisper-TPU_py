@@ -397,7 +397,6 @@ class BeamSearchDecoder(TokenDecoder):
             finished_sequences.append(finished)
 
         tokens = torch.tensor(next_tokens, device=tokens.device)
-        # import pdb; pdb.set_trace()
 
         if self_attention_kcache:
             self.inference.rearrange_kv_cache(
@@ -560,7 +559,7 @@ class DecodingTask:
         
         language = options.language or "en"
         tokenizer = get_tokenizer(
-            model.is_multilingual, language=language, task=options.task
+            model.is_multilingual, num_languages=model.num_languages, language=language, task=options.task
         )
         self.tokenizer: Tokenizer = tokenizer
         self.options: DecodingOptions = self._verify_options(options)
@@ -767,7 +766,6 @@ class DecodingTask:
                     positional_embedding_input = self.model.positional_embedding[offset:offset+1]
                     mask = attention_mask_with_kvcache[offset:offset+1].flip(1)
                     mask = mask.reshape(1, 1, *mask.shape).repeat(n_batch, self.n_text_head, 1, 1).permute(0, 2, 1, 3).contiguous()
-                # import pdb; pdb.set_trace()
 
                 if i == 0:
                     start_time = time.time()
@@ -900,8 +898,8 @@ class DecodingTask:
         tokens: Tensor = torch.tensor([self.initial_tokens]).repeat(n_audio, 1)
 
         # detect language if requested, overwriting the language token
+        
         languages, language_probs = self._detect_language(audio_features, tokens) # encoder forward pass
-
         if self.options.task == "lang_id":
             return [
                 DecodingResult(
@@ -997,7 +995,6 @@ def decode(
     result: Union[DecodingResult, List[DecodingResult]]
         The result(s) of decoding contained in `DecodingResult` dataclass instance(s)
     """
-    # import pdb; pdb.set_trace()
     if single := mel.ndim == 2:
         mel = mel.unsqueeze(0)
 
