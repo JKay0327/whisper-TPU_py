@@ -581,20 +581,24 @@ class Whisper(nn.Module):
             # import pdb; pdb.set_trace()
             # logits = torch.from_numpy(result[0].astype(np.float32))
         else:
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             if self.export_mode:
+                import os
+                folder = "./logits_decoder/"
+                if not os.path.exists(folder):
+                    os.makedirs(folder)
                 model_name= f"logits_decoder_{self.model_name}_{self.beam_size}beam_{self.padding_size}pad"
                 input = (tokens, audio_features,)
                 input_names = ["tokens", "audio_features"]
                 output_names = ["logits",]
                 input_dict = {"tokens":tokens, "audio_features":audio_features}
-                np.savez(model_name + "_inputs.npz", **input_dict)
+                np.savez(folder + model_name + "_inputs.npz", **input_dict)
 
                 if self.export_mode == "onnx":
                     torch.onnx.export(
                         self.decoder,
                         input,  # Pass the actual input data
-                        model_name + ".onnx",
+                        folder + model_name + ".onnx",
                         verbose=True,
                         input_names=input_names,  # Provide input names
                         output_names=output_names,  # Provide output names
@@ -602,9 +606,9 @@ class Whisper(nn.Module):
                     )
                 elif self.export_mode == "pt":
                     torch.jit.trace(self.decoder, input).save(model_name + ".pt")
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             logits = self.decoder(tokens, audio_features)
-            exit()
+            # exit()
         self.call_logits_decoder += 1
         return logits
         # return self.decoder(tokens, audio_features)

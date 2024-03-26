@@ -158,7 +158,7 @@ def transcribe(
         language=language,
         task=task,
     )
-
+    # import pdb;pdb.set_trace()
     if word_timestamps and task == "translate":
         warnings.warn("Word-level timestamps on translations may not be reliable.")
 
@@ -180,7 +180,7 @@ def transcribe(
                 kwargs.pop("best_of", None)
             # print('{:=^80s}'.format(f' decode_with_fallback temperatures {t} '))
             # print(f"kwargs: {kwargs}")
-
+            # import pdb;pdb.set_trace()
             options = DecodingOptions(**kwargs, temperature=t)
             decode_result = model.decode(segment, options)
 
@@ -466,12 +466,13 @@ def cli():
                 f"{model_name} is an English-only model but receipted '{args['language']}'; using English instead."
             )
         args["language"] = "en"
-    if "large" in model_name and args["export_onnx"]:
-        warnings.warn(
-            f"{model_name} only support export pt model; exporting pt model instead."
-        )
-        args["export_onnx"] = False
-        args["export_pt"] = True
+    # import pdb;pdb.set_trace()
+    # if "large" in model_name and args["export_onnx"]:
+    #     warnings.warn(
+    #         f"{model_name} only support export pt model; exporting pt model instead."
+    #     )
+    #     args["export_onnx"] = False
+    #     args["export_pt"] = True
 
     temperature = args.pop("temperature")
     if (increment := args.pop("temperature_increment_on_fallback")) is not None:

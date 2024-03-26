@@ -45,6 +45,19 @@ def export_gather():
             n_text_head=20,
             n_text_layer=32
         )
+    elif name == "large-v3":
+        dims = ModelDimensions(
+            n_mels=128,
+            n_audio_ctx=1500,
+            n_audio_state=1280,
+            n_audio_head=20,
+            n_audio_layer=32,
+            n_vocab=51866,
+            n_text_ctx=448,
+            n_text_state=1280,
+            n_text_head=20,
+            n_text_layer=32
+        )
     elif name == "tiny":
         dims = ModelDimensions(
             n_mels=80,
@@ -87,10 +100,15 @@ def export_gather():
     gather = Gather()
     input = torch.randn(args["beam_size"], dims.n_text_ctx, dims.n_text_state)
     index = torch.tensor(range(args["beam_size"]))
+    import os
+    folder = "./gather_onnx/"
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
     torch.onnx.export(
         gather,
         (input, index),
-        "kvcache_rearrange_small_5beam_448pad.onnx",
+        folder+"kvcache_rearrange_"+name+"_"+str(args["beam_size"])+"beam_448pad.onnx",
         verbose=True,
         opset_version=15
     )

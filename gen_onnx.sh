@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Default values for parameters
-model="small"
+model="large-v2"
 beam_size=5
 padding_size=448
-use_kvcache=false
+use_kvcache=true
 
 python setup.py install
 
@@ -58,6 +58,7 @@ if [ ! -d "onnx_model" ]; then
     echo "[Cmd] mkdir onnx_model"
 fi
 
-mv *.onnx *.npz onnx_model
+# mv *.onnx *.npz onnx_model
+mv *_onnx onnx_model
 
 popd

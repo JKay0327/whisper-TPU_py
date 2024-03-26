@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Default values for parameters
-model="small"
+model="large-v2"
 beam_size=5
 padding_size=448
-compare=false
-use_kvcache=false
-quant=false
+compare=true
+use_kvcache=true
+quant=true
 process=""
 
 bmodel_dir="bmodel"
@@ -87,6 +87,11 @@ elif [ "$model" == "large-v2" ]; then
 	n_text_state=1280
 	n_text_head=20
 	n_text_layer=32
+elif [ "$model" == "large-v3" ]; then
+    n_mels=128
+	n_text_state=1280
+	n_text_head=20
+	n_text_layer=32
 else
 	echo "model must be one of tiny, base, small, medium, large"
 	exit 1
@@ -96,7 +101,7 @@ function gen_bmodel() {
     echo "Transforming $process_name ..."
     case $process_name in 
         encoder)
-            input_shapes="[[1,80,3000]]"
+            input_shapes="[[1,$n_mels,3000]]"
             ;;
         logits_decoder)
             input_shapes="[[1,1],[1,${n_audio_ctx},${n_text_state}]]"
@@ -129,7 +134,7 @@ function gen_bmodel() {
             exit 1
             ;;
     esac
-
+    
     onnx_file="${model_name}.onnx"
     test_input="${model_name}_inputs.npz"
     test_result="${model_name}_top_outputs.npz"
@@ -179,7 +184,8 @@ function gen_bmodel() {
 
 if [ -z "$process" ]; then
     process_list=("encoder" "logits_decoder" "decoder_post")
-    # process_list=("encoder")
+    # process_list=("logits_decoder")
+    # process_list=("decoder_loop_with_kvcache")
     echo "Generating process list ..."
     if [ "$use_kvcache" = true ]; then
         process_list+=("decoder_main_with_kvcache" "decoder_loop_with_kvcache")
@@ -203,7 +209,11 @@ if [ -z "$process" ]; then
             mkdir "$process_name"
             echo "[Cmd] mkdir $process_name"
         fi
-        cp onnx_model/$process_name*.* $process_name/
+        if [ "$model" == "large-v3" ] || [ "$model" == "large-v2" ]; then
+            cp onnx_model/$process_name/* $process_name/
+        else
+            cp onnx_model/$process_name*.* $process_name/
+        fi
         pushd "$process_name"
         if [ ! -d "$model_name" ]; then
             mkdir "$model_name"

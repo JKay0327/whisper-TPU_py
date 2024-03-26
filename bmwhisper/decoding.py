@@ -97,7 +97,11 @@ def detect_language(
                 pass
                 model_name= f"encoder_{model.model_name}_{model.beam_size}beam_{model.padding_size}pad"
                 onnx_input_dict = {"mel":mel}
-                np.savez(model_name + "_inputs.npz", **onnx_input_dict)
+                import os
+                encoder_folder = "./encoder/"
+                if not os.path.exists(encoder_folder):
+                    os.makedirs(encoder_folder)
+                np.savez(encoder_folder + model_name + "_inputs.npz", **onnx_input_dict)
                 if model.export_mode == "onnx":
                     onnx_input_names = ["mel"]
                     onnx_output_names = ["audio_features",]
@@ -105,7 +109,7 @@ def detect_language(
                     torch.onnx.export(
                         model.encoder,
                         (mel,),  # Pass the actual input data
-                        model_name + ".onnx",
+                        encoder_folder + model_name + ".onnx",
                         verbose=True,
                         input_names=onnx_input_names,  # Provide input names
                         output_names=onnx_output_names,  # Provide output names
@@ -115,7 +119,7 @@ def detect_language(
                     torch.jit.trace(model.encoder, (mel,)).save(model_name + ".pt")
             mel_out = model.encoder(mel)
         if model.log:
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             print(f"[Log] output:")
             print(f"[Log] mel: {mel_out}")
         # mel = model.encoder(mel)
@@ -974,6 +978,7 @@ class DecodingTask:
         self.model = model
         
         language = options.language or "en"
+        # import pdb;pdb.set_trace()
         tokenizer = get_tokenizer(
             model.is_multilingual,
             num_languages=model.num_languages,
@@ -1132,7 +1137,7 @@ class DecodingTask:
             audio_features = mel
         else:
             if self.model.log:
-                import pdb; pdb.set_trace()
+                # import pdb; pdb.set_trace()
                 print(f"[Log] _get_audio_features")
                 print(f"[Log] call encoder: {self.model.encoder_infer}")
                 print(f"[Log] input:")
@@ -1174,7 +1179,7 @@ class DecodingTask:
                 audio_features = self.model.encoder(mel)
             # audio_features = self.model.encoder(mel)
             if self.model.log:
-                import pdb; pdb.set_trace()
+                # import pdb; pdb.set_trace()
                 print(f"[Log] output:")
                 print(f"[Log] mel: {mel}")
             self.model.call_encoder +=1
@@ -1272,12 +1277,16 @@ class DecodingTask:
                                 output_names.append(f"cross_attn_vcache_in.{idx}")
                         else:
                             model_name = f"decoder_main_{self.model.model_name}_{self.model.beam_size}beam_{padding_num}pad"
-                        np.savez(model_name + "_inputs.npz", **input_dict)
+                        import os
+                        decoder_main_folder = "./decoder_main_with_kvcache/"
+                        if not os.path.exists(decoder_main_folder):
+                            os.makedirs(decoder_main_folder)
+                        np.savez(decoder_main_folder + model_name + "_inputs.npz", **input_dict)
                         if self.model.export_mode == "onnx":
                             torch.onnx.export(
                                 self.inference_main_process,
                                 input,  # Pass the actual input data
-                                model_name + ".onnx",
+                                decoder_main_folder + model_name + ".onnx",
                                 verbose=True,
                                 input_names=input_names,  # Provide input names
                                 output_names=output_names,  # Provide output names
@@ -1315,12 +1324,16 @@ class DecodingTask:
                         output_names = ["logits", "no_speech_probs"]
                         for name, value in zip(input_names, input):
                             input_dict[name] = value
-                        np.savez(model_name + "_inputs.npz", **input_dict)
+                        import os
+                        decoder_post_folder = "./decoder_post/"
+                        if not os.path.exists(decoder_post_folder):
+                            os.makedirs(decoder_post_folder)
+                        np.savez(decoder_post_folder + model_name + "_inputs.npz", **input_dict)
                         if self.model.export_mode == "onnx":
                             torch.onnx.export(
                                     self.inference_post_process,
                                     input,  # Pass the actual input data
-                                    model_name + ".onnx",
+                                    decoder_post_folder + model_name + ".onnx",
                                     verbose=True,
                                     input_names=input_names,  # Provide input names
                                     output_names=output_names,  # Provide output names
@@ -1372,12 +1385,16 @@ class DecodingTask:
                         input_dict = {}
                         for name, value in zip(input_names, npz_input):
                             input_dict[name] = value
-                        np.savez(model_name + "_inputs.npz", **input_dict)
+                        import os
+                        decoder_loop_folder = "./decoder_loop_with_kvcache/"
+                        if not os.path.exists(decoder_loop_folder):
+                            os.makedirs(decoder_loop_folder)
+                        np.savez(decoder_loop_folder + model_name + "_inputs.npz", **input_dict)
                         if self.model.export_mode == "onnx":
                             torch.onnx.export(
                                 self.inference_loop,
                                 input,  # Pass the actual input data
-                                model_name + ".onnx",
+                                decoder_loop_folder + model_name + ".onnx",
                                 verbose=True,
                                 input_names=input_names,  # Provide input names
                                 output_names=output_names,  # Provide output names
@@ -1802,7 +1819,7 @@ class DecodingTask:
                             print(f"[Log] decoder_post_infer")
                             print(f"[Log] input:")
                             print(f"[Log] bmodel_input: {bmodel_input}")
-                            import pdb; pdb.set_trace()
+                            # import pdb; pdb.set_trace()
                         _ = self.model.decoder_post_infer.put(*bmodel_input)
                         _, results, _ = self.model.decoder_post_infer.get()
                         self.model.time += time.time() - start_time
@@ -1867,7 +1884,7 @@ class DecodingTask:
                                 positional_embedding_input, 
                                 mask, 
                                 )
-                        import pdb; pdb.set_trace()
+                        # import pdb; pdb.set_trace()
                         x_sot = x[:, padding_num - initial_tokens_length + self.sot_index:padding_num - initial_tokens_length + self.sot_index + 1]
                         x_last = x[:, -1:]
                         if self.model.export_mode:
@@ -2103,6 +2120,7 @@ class DecodingTask:
 
         # select the top-ranked sample in each group
         selected = self.sequence_ranker.rank(tokens, sum_logprobs)
+        # import pdb;pdb.set_trace()
         tokens: List[List[int]] = [t[i].tolist() for i, t in zip(selected, tokens)]
         texts: List[str] = [tokenizer.decode(t).strip() for t in tokens]
 
